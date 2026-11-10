@@ -49,8 +49,8 @@ struct SettingsView: View {
             TextField("Model", text: $chatSettings.model,
                       prompt: Text(ChatSettings.defaultModel))
 
-            Toggle("Include the document's text in prompts", isOn: $chatSettings.includeDocument)
-            Text("When enabled, the open document is attached to every message so the assistant can quote it.")
+            Toggle("Include document text in prompts", isOn: $chatSettings.includeDocument)
+            Text("When enabled, the open document and every file checked in the sidebar are attached to each message so the assistant can quote them.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

@@ -6,16 +6,44 @@ struct SavedView: Identifiable, Codable, Equatable {
     var name: String
     var paths: [String]
     var selectedPath: String?
+    /// The full tab tree including nested links and web pages. `nil` in views
+    /// saved before nesting existed; those restore as flat tab lists.
+    var tree: [TabSnapshot]?
+    /// Top-level terminal tabs. Nested terminals live inside `tree`.
+    var topLevelTerminals: [TerminalTabSnapshot]?
+    /// Workspace tabs and everything nested under them.
+    var workspaces: [WorkspaceSnapshot]?
+    /// The web page that was showing when the view was saved, if any.
+    var selectedWebPageURL: String?
+    /// The terminal that was showing when the view was saved, if any.
+    var selectedTerminalID: UUID?
+    /// The workspace that was showing when the view was saved, if any.
+    var selectedWorkspaceID: UUID?
 
-    init(id: UUID = UUID(), name: String, paths: [String], selectedPath: String? = nil) {
+    init(id: UUID = UUID(),
+         name: String,
+         paths: [String],
+         selectedPath: String? = nil,
+         tree: [TabSnapshot]? = nil,
+         topLevelTerminals: [TerminalTabSnapshot]? = nil,
+         workspaces: [WorkspaceSnapshot]? = nil,
+         selectedWebPageURL: String? = nil,
+         selectedTerminalID: UUID? = nil,
+         selectedWorkspaceID: UUID? = nil) {
         self.id = id
         self.name = name
         self.paths = paths
         self.selectedPath = selectedPath
+        self.tree = tree
+        self.topLevelTerminals = topLevelTerminals
+        self.workspaces = workspaces
+        self.selectedWebPageURL = selectedWebPageURL
+        self.selectedTerminalID = selectedTerminalID
+        self.selectedWorkspaceID = selectedWorkspaceID
     }
 
-    /// How many files the snapshot stores.
-    var fileCount: Int { paths.count }
+    /// How many tabs the snapshot stores (files plus workspaces).
+    var fileCount: Int { paths.count + (workspaces?.count ?? 0) }
 }
 
 /// Owns the named snapshots of the open tab list. State is persisted as JSON
@@ -47,10 +75,27 @@ final class SavedViewStore: ObservableObject {
     /// Stores a snapshot, replacing any existing view with the same name.
     /// Returns nil when the name is blank or there is nothing to save.
     @discardableResult
-    func save(name: String, paths: [String], selectedPath: String?) -> SavedView? {
+    func save(name: String,
+              paths: [String],
+              selectedPath: String?,
+              tree: [TabSnapshot]? = nil,
+              topLevelTerminals: [TerminalTabSnapshot]? = nil,
+              workspaces: [WorkspaceSnapshot]? = nil,
+              selectedWebPageURL: String? = nil,
+              selectedTerminalID: UUID? = nil,
+              selectedWorkspaceID: UUID? = nil) -> SavedView? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !paths.isEmpty else { return nil }
-        let view = SavedView(name: trimmed, paths: paths, selectedPath: selectedPath)
+        guard !trimmed.isEmpty,
+              !paths.isEmpty || !(workspaces ?? []).isEmpty else { return nil }
+        let view = SavedView(name: trimmed,
+                             paths: paths,
+                             selectedPath: selectedPath,
+                             tree: tree,
+                             topLevelTerminals: topLevelTerminals,
+                             workspaces: workspaces,
+                             selectedWebPageURL: selectedWebPageURL,
+                             selectedTerminalID: selectedTerminalID,
+                             selectedWorkspaceID: selectedWorkspaceID)
         views.removeAll { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }
         views.insert(view, at: 0)
         persist()

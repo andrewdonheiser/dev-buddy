@@ -19,6 +19,12 @@ struct ChatSidebarView: View {
     let documentName: String
     /// The document's current Markdown, sent along when context is enabled.
     let documentText: String?
+    /// Files checked in the sidebar plus the document's nested links and web
+    /// pages, sent alongside the open document.
+    let attachedDocuments: [ChatStore.AttachedDocument]
+    /// Re-resolves the attachments just before sending so freshly loaded web
+    /// pages carry their current text. Falls back to `attachedDocuments`.
+    var contextRefresher: (() async -> [ChatStore.AttachedDocument])? = nil
 
     @FocusState private var inputFocused: Bool
 
@@ -90,6 +96,14 @@ struct ChatSidebarView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help("Model for this conversation — change it in Settings")
+                if !attachedDocuments.isEmpty {
+                    Label(attachedFilesLabel, systemImage: "doc.on.doc")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help("Also sent with each message: "
+                              + attachedDocuments.map(\.name).joined(separator: ", "))
+                }
                 if !keys.hasKey {
                     SettingsLink {
                         Label("Add API key", systemImage: "exclamationmark.triangle.fill")
@@ -115,8 +129,25 @@ struct ChatSidebarView: View {
         .toggleStyle(.button)
         .controlSize(.small)
         .help(settings.includeDocument
-              ? "The document is sent with every message"
-              : "Document text is not sent; the assistant sees the conversation only")
+              ? "The open document, its nested files and web pages, and checked tabs are sent with every message"
+              : "File contents are not sent; the assistant sees the conversation only")
+    }
+
+    /// "2 attached files" — the checked, linked, and browsed items attached to
+    /// this conversation.
+    private var attachedFilesLabel: String {
+        attachedDocuments.count == 1 ? "1 attached file" : "\(attachedDocuments.count) attached files"
+    }
+
+    /// One line describing what each message carries, for the empty state.
+    private var contextDescription: String {
+        guard settings.includeDocument else {
+            return "Only the conversation is sent to the model."
+        }
+        guard !attachedDocuments.isEmpty else {
+            return "The document's text is sent with each message."
+        }
+        return "The document's text, its nested files, and \(attachedFilesLabel) are sent with each message."
     }
 
     // MARK: - Transcript
@@ -160,7 +191,7 @@ struct ChatSidebarView: View {
                 .foregroundStyle(.tertiary)
             Text("Ask this document anything")
                 .font(.headline)
-            Text("Replies stream in as they are written. \(settings.includeDocument ? "The document's text is sent with each message." : "Only the conversation is sent to the model.")")
+            Text("Replies stream in as they are written. \(contextDescription)")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
@@ -292,12 +323,22 @@ struct ChatSidebarView: View {
     private func send() {
         guard canSend else { return }
         let prompt = draft
-        // Keep the draft if the send did not start (a blank prompt or a reply
-        // already streaming).
-        if chat.send(prompt, in: documentPath, documentName: documentName, documentText: documentText) {
-            drafts.clear(for: documentPath)
-        }
         inputFocused = true
+        // Resolve attachments asynchronously so web pages still loading can
+        // contribute their current text to this message.
+        let refresh = contextRefresher
+        Task { @MainActor in
+            let attachments = await refresh?() ?? attachedDocuments
+            // Keep the draft if the send did not start (a blank prompt or a
+            // reply already streaming).
+            if chat.send(prompt,
+                         in: documentPath,
+                         documentName: documentName,
+                         documentText: documentText,
+                         attachedDocuments: attachments) {
+                drafts.clear(for: documentPath)
+            }
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {

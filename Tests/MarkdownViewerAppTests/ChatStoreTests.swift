@@ -55,6 +55,85 @@ struct ChatStoreTests {
         #expect(request?.turns == [.init(role: "user", content: "hi")])
     }
 
+    @Test("checked sidebar files are attached to the system prompt after the open document")
+    func attachesCheckedDocuments() async {
+        let fixture = ChatFixture()
+        fixture.recorder.handler = { _ in StreamRecorder.immediate(["ok"]) }
+
+        fixture.chat.send("hi",
+                          in: path,
+                          documentName: "note.md",
+                          documentText: "# Title",
+                          attachedDocuments: [.init(name: "other.md", text: "# Other")])
+        #expect(await waitUntil { !fixture.chat.conversation(for: self.path).isStreaming })
+
+        let system = fixture.recorder.requests.first?.system ?? ""
+        #expect(system.contains("<document name=\"note.md\">\n# Title\n</document>"))
+        #expect(system.contains("<document name=\"other.md\">\n# Other\n</document>"))
+
+        // The open document is described first, the checked file after it.
+        let open = system.range(of: "<document name=\"note.md\">")
+        let extra = system.range(of: "<document name=\"other.md\">")
+        #expect(open != nil && extra != nil)
+        if let open, let extra {
+            #expect(open.lowerBound < extra.lowerBound)
+        }
+    }
+
+    @Test("checked sidebar files are omitted when document context is off")
+    func checkedDocumentsRespectContextToggle() async {
+        let fixture = ChatFixture()
+        fixture.settings.includeDocument = false
+        fixture.recorder.handler = { _ in StreamRecorder.immediate(["ok"]) }
+
+        fixture.chat.send("hi",
+                          in: path,
+                          documentName: "note.md",
+                          documentText: "# Title",
+                          attachedDocuments: [.init(name: "other.md", text: "# Other")])
+        #expect(await waitUntil { !fixture.chat.conversation(for: self.path).isStreaming })
+
+        let system = fixture.recorder.requests.first?.system ?? ""
+        #expect(!system.contains("# Title"))
+        #expect(!system.contains("# Other"))
+    }
+
+    @Test("an oversized checked file is truncated in the prompt")
+    func truncatesCheckedDocument() async {
+        let fixture = ChatFixture()
+        fixture.recorder.handler = { _ in StreamRecorder.immediate(["ok"]) }
+
+        let long = String(repeating: "a", count: 25_000)
+        fixture.chat.send("hi",
+                          in: path,
+                          documentName: "note.md",
+                          documentText: nil,
+                          attachedDocuments: [.init(name: "big.md", text: long)])
+        #expect(await waitUntil { !fixture.chat.conversation(for: self.path).isStreaming })
+
+        let system = fixture.recorder.requests.first?.system ?? ""
+        #expect(system.contains("<document name=\"big.md\">"))
+        #expect(system.contains("…[document truncated]"))
+        #expect(!system.contains(String(repeating: "a", count: 25_000)))
+    }
+
+    @Test("a checked file with no text is left out of the prompt")
+    func skipsEmptyCheckedDocument() async {
+        let fixture = ChatFixture()
+        fixture.recorder.handler = { _ in StreamRecorder.immediate(["ok"]) }
+
+        fixture.chat.send("hi",
+                          in: path,
+                          documentName: "note.md",
+                          documentText: nil,
+                          attachedDocuments: [.init(name: "blank.md", text: "  \n ")])
+        #expect(await waitUntil { !fixture.chat.conversation(for: self.path).isStreaming })
+
+        let system = fixture.recorder.requests.first?.system ?? ""
+        #expect(!system.contains("<document name=\"blank.md\">"))
+        #expect(!system.contains("documents' current contents"))
+    }
+
     @Test("stopping a reply keeps the text that had already streamed")
     func stopKeepsPartial() async {
         let fixture = ChatFixture()
