@@ -37,19 +37,9 @@ struct MarkdownViewerApp: App {
                     store.presentOpenPanel()
                 }
                 .keyboardShortcut("o", modifiers: .command)
-                Button("Open Workspace…") {
-                    store.presentWorkspacePanel()
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
             }
 
-            CommandGroup(replacing: .saveItem) {
-                Button("Save") {
-                    store.saveSelected()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!store.canSaveSelected)
-            }
+            CommandGroup(replacing: .saveItem) { }
 
             CommandMenu("Tabs") {
                 Button("Next Tab") { store.selectNext() }
@@ -62,12 +52,10 @@ struct MarkdownViewerApp: App {
                     .disabled(store.selectedID == nil)
                 Button("Close Tab") { store.closeSelected() }
                     .keyboardShortcut("w", modifiers: .command)
-                    .disabled(!store.canCloseSelected)
-                Button("New Terminal") { store.openTerminalTab() }
-                    .keyboardShortcut("t", modifiers: .command)
+                    .disabled(store.selectedID == nil)
                 Divider()
                 Button("Save View…") { promptForNewView() }
-                    .disabled(store.documents.isEmpty && store.workspaces.isEmpty)
+                    .disabled(store.documents.isEmpty)
                 Menu("Open View") {
                     if savedViews.views.isEmpty {
                         Text("No Saved Views")
@@ -83,12 +71,6 @@ struct MarkdownViewerApp: App {
             SidebarCommands()
 
             CommandMenu("View") {
-                Button(store.isEditingSelected ? "Finish Editing" : "Edit") {
-                    store.toggleEditSelected()
-                }
-                .keyboardShortcut("e", modifiers: .command)
-                .disabled(store.selectedID == nil)
-                Divider()
                 Picker("Content Width", selection: $options.contentWidth) {
                     ForEach(MarkdownContentWidth.allCases) { width in
                         Text(width.title).tag(width)
@@ -139,13 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         DocumentStore.shared.open(urls: urls)
-    }
-
-    /// Blocks quitting while edited documents have unsaved changes, giving the
-    /// user a chance to save. Runs before `applicationWillTerminate`, so a
-    /// quit that proceeds still saves the session afterwards.
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        DocumentStore.shared.resolveUnsavedEdits(quitting: true) ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {

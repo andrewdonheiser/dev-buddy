@@ -12,8 +12,7 @@ let package = Package(
         .library(name: "MarkdownViewerChat", targets: ["MarkdownViewerChat"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0")
+        .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0")
     ],
     targets: [
         .target(
@@ -25,11 +24,7 @@ let package = Package(
         .target(name: "MarkdownViewerChat"),
         .executableTarget(
             name: "MarkdownViewer",
-            dependencies: [
-                "MarkdownViewerKit",
-                "MarkdownViewerChat",
-                .product(name: "SwiftTerm", package: "SwiftTerm")
-            ]
+            dependencies: ["MarkdownViewerKit", "MarkdownViewerChat"]
         ),
         .testTarget(
             name: "MarkdownViewerKitTests",

@@ -37,13 +37,6 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// A file the user checked in the sidebar, sent with each message as an
-    /// extra input alongside the open document.
-    struct AttachedDocument: Equatable {
-        let name: String
-        var text: String
-    }
-
     struct Conversation: Identifiable, Equatable {
         /// The document path this conversation belongs to.
         let id: String
@@ -107,15 +100,11 @@ final class ChatStore: ObservableObject {
     /// Appends `prompt` as a user message and starts streaming a reply.
     /// Returns `false` when nothing was sent (a blank prompt, or a reply already
     /// streaming), so the caller can keep the draft.
-    ///
-    /// `attachedDocuments` are the sidebar tabs checked for LLM input; they are
-    /// sent after the open document when document context is enabled.
     @discardableResult
     func send(_ prompt: String,
               in path: String,
               documentName: String,
-              documentText: String?,
-              attachedDocuments: [AttachedDocument] = []) -> Bool {
+              documentText: String?) -> Bool {
         var conversation = conversation(for: path)
         let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !conversation.isStreaming else { return false }
@@ -131,9 +120,7 @@ final class ChatStore: ObservableObject {
             model: settings.resolvedModel,
             baseURL: settings.resolvedBaseURL,
             apiKey: apiKey,
-            system: systemPrompt(documentName: documentName,
-                                 documentText: documentText,
-                                 attachedDocuments: attachedDocuments),
+            system: systemPrompt(documentName: documentName, documentText: documentText),
             turns: LLMClient.coalescing(conversation.messages.map {
                 LLMClient.Turn(role: $0.role.rawValue, content: $0.text)
             })
@@ -259,47 +246,27 @@ final class ChatStore: ObservableObject {
         return error.localizedDescription
     }
 
-    /// The prompt preamble: how to answer, plus the documents themselves when
-    /// the user has asked for them to be included — the open document first,
-    /// then every file checked in the sidebar.
-    private func systemPrompt(documentName: String,
-                              documentText: String?,
-                              attachedDocuments: [AttachedDocument]) -> String {
+    /// The prompt preamble: how to answer, plus the document itself when the
+    /// user has asked for it to be included.
+    private func systemPrompt(documentName: String, documentText: String?) -> String {
         var prompt = """
         You are a helpful assistant discussing the Markdown document "\(documentName)" with the user. \
         Answer in Markdown, be concise, and stay focused on the document unless asked otherwise.
         """
 
-        guard settings.includeDocument else { return prompt }
-
-        var sections: [(name: String, text: String)] = []
-        if let documentText {
-            sections.append((name: documentName, text: documentText))
+        guard settings.includeDocument,
+              let text = documentText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            return prompt
         }
-        sections.append(contentsOf: attachedDocuments.map { (name: $0.name, text: $0.text) })
 
-        // Keep only the documents with something to show, each bounded so one
-        // huge file cannot crowd out the rest of the prompt.
-        let bodies = sections.compactMap { section -> (name: String, text: String)? in
-            let trimmed = section.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
-            return (name: section.name, text: Self.truncated(trimmed))
-        }
-        guard !bodies.isEmpty else { return prompt }
-
-        prompt += attachedDocuments.isEmpty
-            ? "\n\nThe document's current contents are below, between the markers.\n"
-            : "\n\nThe documents' current contents are below, each between its own markers.\n"
-        prompt += bodies
-            .map { "<document name=\"\($0.name)\">\n\($0.text)\n</document>" }
-            .joined(separator: "\n\n")
-        return prompt
-    }
-
-    /// Caps a body so a single very long file cannot consume the whole prompt.
-    private static func truncated(_ text: String, limit: Int = 20_000) -> String {
-        text.count > limit
+        let limit = 20_000
+        let body = text.count > limit
             ? String(text.prefix(limit)) + "\n\n…[document truncated]"
             : text
+
+        prompt += "\n\nThe document's current contents are below, between the markers.\n"
+        prompt += "<document name=\"\(documentName)\">\n\(body)\n</document>"
+        return prompt
     }
 }

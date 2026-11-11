@@ -1,12 +1,6 @@
 import Foundation
 import MarkdownViewerChat
-import Testing
 @testable import MarkdownViewer
-
-/// Parent for the suites that mutate the shared `DocumentStore`. Marked
-/// serialized so parallel test runs don't fight over the same tab state.
-@Suite(.serialized)
-enum DocumentStoreSuites {}
 
 /// A `Keychain` that keeps secrets in memory so tests never touch the real one.
 final class InMemoryKeychain: Keychain {
