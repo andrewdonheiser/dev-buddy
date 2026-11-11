@@ -28,26 +28,3 @@ inference:
         models:
             rits/zai-org/glm-5-3:
                 api: openai-completions
-agents:
-    - name: triage
-      model: gateway/rits/zai-org/glm-5-3
-      effort: high
-    - name: code
-      model: gateway/rits/zai-org/glm-5-3
-      effort: high
-      subagents:
-        default: gateway/rits/zai-org/glm-5-3
-    - name: review
-      model: gateway/rits/zai-org/glm-5-3
-      effort: high
-      subagents:
-        default: gateway/rits/zai-org/glm-5-3
-    - name: fix
-      model: gateway/rits/zai-org/glm-5-3
-      effort: high
-    - name: retro
-      model: gateway/rits/zai-org/glm-5-3
-      effort: high
-    - name: prioritize
-      model: gateway/rits/zai-org/glm-5-3
-      effort: high
