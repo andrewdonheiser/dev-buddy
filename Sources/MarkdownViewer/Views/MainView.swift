@@ -37,6 +37,17 @@ struct MainView: View {
         .onOpenURL { url in
             store.open(url: url)
         }
+        .alert("Close this terminal?",
+               isPresented: Binding(
+                   get: { store.pendingCloseTerminalID != nil },
+                   set: { if !$0 { store.cancelCloseTerminal() } }
+               ),
+               presenting: store.pendingCloseTerminalID) { _ in
+            Button("Close Terminal", role: .destructive) { store.confirmCloseTerminal() }
+            Button("Cancel", role: .cancel) { store.cancelCloseTerminal() }
+        } message: { _ in
+            Text("The shell and its running programs will be terminated.")
+        }
     }
 
     @ViewBuilder
@@ -44,33 +55,31 @@ struct MainView: View {
         if let terminal = store.selectedTerminal {
             // A terminal tab keeps the chat panel on screen, bound to the
             // selected document when one is open.
-            if chatVisible, let document = store.selectedDocument {
-                HSplitView {
-                    TerminalPane(terminal: terminal)
-                        .id(terminal.id)
-                    ChatSidebarView(documentPath: document.url.path,
-                                    documentName: document.fileName,
-                                    documentText: document.markdown)
-                        .frame(minWidth: 300, idealWidth: 380, maxWidth: 560)
-                }
-            } else {
-                TerminalPane(terminal: terminal)
-                    .id(terminal.id)
-            }
+            chatSplit(TerminalPane(terminal: terminal)
+                .id(terminal.id),
+                document: store.selectedDocument)
         } else if let document = store.selectedDocument {
-            if chatVisible {
-                HSplitView {
-                    documentColumn(for: document)
-                    ChatSidebarView(documentPath: document.url.path,
-                                    documentName: document.fileName,
-                                    documentText: document.markdown)
-                        .frame(minWidth: 300, idealWidth: 380, maxWidth: 560)
-                }
-            } else {
-                documentColumn(for: document)
-            }
+            chatSplit(documentColumn(for: document), document: document)
         } else {
             EmptyStateView()
+        }
+    }
+
+    /// The chat panel beside `content`, sharing `document`'s chat context.
+    /// Used by both the document and terminal detail columns so the panel's
+    /// frame and bindings live in one place.
+    @ViewBuilder
+    private func chatSplit<Content: View>(_ content: Content, document: OpenDocument?) -> some View {
+        if chatVisible, let document {
+            HSplitView {
+                content
+                ChatSidebarView(documentPath: document.url.path,
+                                documentName: document.fileName,
+                                documentText: document.markdown)
+                    .frame(minWidth: 300, idealWidth: 380, maxWidth: 560)
+            }
+        } else {
+            content
         }
     }
 

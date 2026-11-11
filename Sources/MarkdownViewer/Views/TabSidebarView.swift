@@ -281,7 +281,7 @@ struct TabSidebarView: View {
                 guard let id else { return }
                 if id.hasPrefix(SidebarItem.terminalIDPrefix),
                    let terminalID = UUID(uuidString: String(id.dropFirst(SidebarItem.terminalIDPrefix.count))) {
-                    store.select(terminalID: terminalID)
+                    store.select(terminalID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
                     store.selectedID = document.id
                 } else {
@@ -377,7 +377,7 @@ private struct SidebarRow: View {
             }
             Spacer(minLength: 4)
             Button {
-                store.closeTerminal(id: terminal.id)
+                store.requestCloseTerminal(terminal.id)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .semibold))
@@ -386,7 +386,8 @@ private struct SidebarRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Close terminal tab")
+            .help("Close terminal tab (terminates the shell and its running programs)")
+            .accessibilityLabel("Close terminal \(terminal.title)")
         }
         .padding(.vertical, 2)
     }
@@ -478,7 +479,7 @@ private struct SidebarContextMenu: View {
         }
         if let terminal = item.terminal {
             Divider()
-            Button("Close Terminal") { store.closeTerminal(id: terminal.id) }
+            Button("Close Terminal") { store.requestCloseTerminal(terminal.id) }
         }
     }
 
@@ -486,7 +487,7 @@ private struct SidebarContextMenu: View {
         if let document = item.document {
             store.selectedID = document.id
         } else if let terminal = item.terminal {
-            store.select(terminalID: terminal.id)
+            store.select(terminal.id)
         } else {
             store.open(url: URL(fileURLWithPath: item.path))
         }
