@@ -41,7 +41,23 @@ struct MainView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if let document = store.selectedDocument {
+        if let terminal = store.selectedTerminal {
+            // A terminal tab keeps the chat panel on screen, bound to the
+            // selected document when one is open.
+            if chatVisible, let document = store.selectedDocument {
+                HSplitView {
+                    TerminalPane(terminal: terminal)
+                        .id(terminal.id)
+                    ChatSidebarView(documentPath: document.url.path,
+                                    documentName: document.fileName,
+                                    documentText: document.markdown)
+                        .frame(minWidth: 300, idealWidth: 380, maxWidth: 560)
+                }
+            } else {
+                TerminalPane(terminal: terminal)
+                    .id(terminal.id)
+            }
+        } else if let document = store.selectedDocument {
             if chatVisible {
                 HSplitView {
                     documentColumn(for: document)
@@ -120,6 +136,10 @@ private struct EmptyStateView: View {
                 store.presentOpenPanel()
             }
             .keyboardShortcut("o", modifiers: .command)
+            Button("New Terminal") {
+                store.openTerminalTab()
+            }
+            .keyboardShortcut("t", modifiers: .command)
             Text("or drag a .md file here")
                 .font(.callout)
                 .foregroundStyle(.tertiary)

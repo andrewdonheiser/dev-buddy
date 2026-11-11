@@ -32,17 +32,28 @@ enum SidebarSort: String, CaseIterable, Identifiable {
     }
 }
 
-/// A row in the sidebar: either an open tab or a search result for a file that
-/// is not currently open.
+/// A row in the sidebar: an open tab (document or terminal) or a search
+/// result for a file that is not currently open.
 enum SidebarItem: Identifiable {
     case open(OpenDocument, [String])
+    case terminal(TerminalTab)
     case result(LabeledFile)
 
-    var id: String { path }
+    /// Prefix marking a terminal tab row.
+    static let terminalIDPrefix = "terminal:"
+
+    var id: String {
+        switch self {
+        case .open(let document, _): return document.url.path
+        case .terminal(let terminal): return Self.terminalIDPrefix + terminal.id.uuidString
+        case .result(let file): return file.path
+        }
+    }
 
     var path: String {
         switch self {
         case .open(let document, _): return document.url.path
+        case .terminal(let terminal): return terminal.workingDirectory.path
         case .result(let file): return file.path
         }
     }
@@ -52,9 +63,15 @@ enum SidebarItem: Identifiable {
         return nil
     }
 
+    var terminal: TerminalTab? {
+        if case .terminal(let terminal) = self { return terminal }
+        return nil
+    }
+
     var title: String {
         switch self {
         case .open(let document, _): return document.title
+        case .terminal(let terminal): return terminal.title
         case .result(let file): return file.displayName
         }
     }
@@ -62,6 +79,7 @@ enum SidebarItem: Identifiable {
     var fileName: String {
         switch self {
         case .open(let document, _): return document.fileName
+        case .terminal(let terminal): return terminal.workingDirectory.lastPathComponent
         case .result(let file): return file.fileName
         }
     }
@@ -69,6 +87,7 @@ enum SidebarItem: Identifiable {
     var labelNames: [String] {
         switch self {
         case .open(_, let names): return names
+        case .terminal: return []
         case .result(let file): return file.labels
         }
     }
@@ -189,13 +208,22 @@ struct TabSidebarView: View {
 
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                store.presentOpenPanel()
-            } label: {
-                Label("Open File…", systemImage: "plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                Button {
+                    store.presentOpenPanel()
+                } label: {
+                    Label("Open File…", systemImage: "plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                Button {
+                    store.openTerminalTab()
+                } label: {
+                    Label("Terminal", systemImage: "terminal")
+                }
+                .buttonStyle(.plain)
+                .help("Open a terminal tab")
             }
-            .buttonStyle(.plain)
             HStack(spacing: 8) {
                 Button {
                     promptForNewView()
@@ -243,13 +271,21 @@ struct TabSidebarView: View {
     /// Selects an open tab, or opens the file when the row is a search result.
     private var selection: Binding<String?> {
         Binding(
-            get: { store.selectedDocument?.url.path },
-            set: { path in
-                guard let path else { return }
-                if let document = store.documents.first(where: { $0.url.path == path }) {
+            get: {
+                if let terminal = store.selectedTerminal {
+                    return SidebarItem.terminalIDPrefix + terminal.id.uuidString
+                }
+                return store.selectedDocument?.url.path
+            },
+            set: { id in
+                guard let id else { return }
+                if id.hasPrefix(SidebarItem.terminalIDPrefix),
+                   let terminalID = UUID(uuidString: String(id.dropFirst(SidebarItem.terminalIDPrefix.count))) {
+                    store.select(terminalID: terminalID)
+                } else if let document = store.documents.first(where: { $0.url.path == id }) {
                     store.selectedID = document.id
                 } else {
-                    store.open(url: URL(fileURLWithPath: path))
+                    store.open(url: URL(fileURLWithPath: id))
                 }
             }
         )
@@ -261,16 +297,28 @@ struct TabSidebarView: View {
             if let id = activeLabelID, let name = labels.label(id: id)?.name {
                 files = files.filter { $0.labels.contains(name) }
             }
-            return files.map { file in
+            var results = files.map { file -> SidebarItem in
                 if let document = store.documents.first(where: { $0.url.path == file.path }) {
                     return .open(document, file.labels)
                 }
                 return .result(file)
             }
+            // Terminal tabs match by title or directory; they carry no labels.
+            if !trimmedQuery.isEmpty {
+                results += store.terminals
+                    .filter {
+                        $0.title.localizedCaseInsensitiveContains(trimmedQuery)
+                            || $0.workingDirectory.path.localizedCaseInsensitiveContains(trimmedQuery)
+                    }
+                    .map { SidebarItem.terminal($0) }
+            }
+            return results
         }
-        return orderedDocuments.map { document in
-            .open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
+        var openItems = orderedDocuments.map { document in
+            SidebarItem.open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
         }
+        openItems += store.terminals.map { SidebarItem.terminal($0) }
+        return openItems
     }
 
     private var orderedDocuments: [OpenDocument] {
@@ -286,6 +334,7 @@ struct TabSidebarView: View {
         if isSearching {
             return items.count == 1 ? "1 Result" : "\(items.count) Results"
         }
+        if store.documents.isEmpty, !store.terminals.isEmpty { return "Terminals" }
         return store.documents.isEmpty ? "No Files" : "Open Files"
     }
 
@@ -303,6 +352,47 @@ private struct SidebarRow: View {
     let onFilterLabel: (String) -> Void
 
     var body: some View {
+        if let terminal = item.terminal {
+            terminalRow(terminal)
+        } else {
+            tabRow
+        }
+    }
+
+    /// The terminal tab row: terminal icon, title, working directory and a
+    /// close button.
+    private func terminalRow(_ terminal: TerminalTab) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "terminal")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(terminal.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(terminal.workingDirectory.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            Button {
+                store.closeTerminal(id: terminal.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close terminal tab")
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// The document tab and search result row.
+    private var tabRow: some View {
         HStack(spacing: 8) {
             Image(systemName: item.document != nil ? "doc.text" : "doc.text.magnifyingglass")
                 .foregroundStyle(.secondary)
@@ -368,7 +458,9 @@ private struct SidebarContextMenu: View {
 
     var body: some View {
         Button("Open") { open() }
-        Menu("Labels") { LabelMenuItems(path: item.path) }
+        if item.terminal == nil {
+            Menu("Labels") { LabelMenuItems(path: item.path) }
+        }
         Divider()
         if let document = item.document {
             Button("Reload from Disk") { store.refresh(document.id) }
@@ -384,11 +476,17 @@ private struct SidebarContextMenu: View {
             Divider()
             Button("Close Tab") { store.close(document.id) }
         }
+        if let terminal = item.terminal {
+            Divider()
+            Button("Close Terminal") { store.closeTerminal(id: terminal.id) }
+        }
     }
 
     private func open() {
         if let document = item.document {
             store.selectedID = document.id
+        } else if let terminal = item.terminal {
+            store.select(terminalID: terminal.id)
         } else {
             store.open(url: URL(fileURLWithPath: item.path))
         }

@@ -12,7 +12,17 @@ final class DocumentStore: ObservableObject {
     static let shared = DocumentStore()
 
     @Published private(set) var documents: [OpenDocument] = []
-    @Published var selectedID: OpenDocument.ID?
+    @Published var selectedID: OpenDocument.ID? {
+        // Selecting a document always leaves the terminal pane, so the detail
+        // column goes back to Markdown.
+        didSet {
+            selectedTerminalID = nil
+        }
+    }
+    /// The terminal tab shown in the embedded terminal, if any.
+    @Published var selectedTerminalID: TerminalTab.ID?
+    /// Terminal tabs, in open order.
+    @Published private(set) var terminals: [TerminalTab] = []
 
     private var watchers: [OpenDocument.ID: FileWatcher] = [:]
     private let renderer = HTMLRenderer()
@@ -38,6 +48,58 @@ final class DocumentStore: ObservableObject {
     var selectedDocument: OpenDocument? {
         guard let selectedID else { return nil }
         return documents.first { $0.id == selectedID }
+    }
+
+    var selectedTerminal: TerminalTab? {
+        guard let selectedTerminalID else { return nil }
+        return terminals.first { $0.id == selectedTerminalID }
+    }
+
+    // MARK: - Terminal tabs
+
+    /// Selects a terminal tab to show in the terminal pane.
+    func select(terminalID: TerminalTab.ID) {
+        guard terminals.contains(where: { $0.id == terminalID }) else { return }
+        selectedTerminalID = terminalID
+    }
+
+    /// Opens a terminal tab running the user's login shell in `directory`.
+    @discardableResult
+    func openTerminal(in directory: URL) -> TerminalTab {
+        let terminal = TerminalTab(workingDirectory: directory)
+        terminals.append(terminal)
+        selectedTerminalID = terminal.id
+        return terminal
+    }
+
+    /// Opens a terminal tab in the selected document's folder (or the home
+    /// folder when nothing is open).
+    @discardableResult
+    func openTerminalTab() -> TerminalTab {
+        let directory = selectedDocument?.url.deletingLastPathComponent()
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        return openTerminal(in: directory)
+    }
+
+    /// Closes a terminal tab and stops its process.
+    func closeTerminal(id: TerminalTab.ID) {
+        guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
+        terminals.remove(at: index)
+        TerminalSessionManager.shared.removeSession(terminalID: id)
+        guard selectedTerminalID == id else { return }
+        selectedTerminalID = nil
+        // Closing the visible terminal returns to the selected document's
+        // view; with no document open, fall back to a neighboring terminal.
+        if selectedDocument == nil, !terminals.isEmpty {
+            selectedTerminalID = terminals[min(index, terminals.count - 1)].id
+        }
+    }
+
+    /// Updates a terminal tab's title as the running program reports it.
+    func updateTerminalTitle(id: TerminalTab.ID, title: String) {
+        guard let index = terminals.firstIndex(where: { $0.id == id }),
+              !title.isEmpty, terminals[index].title != title else { return }
+        terminals[index].title = title
     }
 
     // MARK: - Opening
@@ -119,6 +181,9 @@ final class DocumentStore: ObservableObject {
         if wasSelected {
             if documents.isEmpty {
                 selectedID = nil
+                // With no documents left, fall back to a terminal tab when
+                // one is open.
+                selectedTerminalID = terminals.first?.id
             } else {
                 let nextIndex = min(index, documents.count - 1)
                 selectedID = documents[nextIndex].id
@@ -127,16 +192,31 @@ final class DocumentStore: ObservableObject {
     }
 
     func closeSelected() {
+        // With a terminal on screen, ⌘W closes that first, not its document.
+        if let terminalID = selectedTerminalID {
+            closeTerminal(id: terminalID)
+            return
+        }
         guard let selectedID else { return }
         close(selectedID)
     }
 
-    /// Closes every open document.
+    /// Whether ⌘W has anything to close right now.
+    var canCloseSelected: Bool {
+        selectedID != nil || selectedTerminalID != nil
+    }
+
+    /// Closes every open document and terminal.
     func closeAll() {
         for watcher in watchers.values { watcher.stop() }
         watchers = [:]
         documents = []
+        for terminal in terminals {
+            TerminalSessionManager.shared.removeSession(terminalID: terminal.id)
+        }
+        terminals = []
         selectedID = nil
+        selectedTerminalID = nil
     }
 
     // MARK: - Saved views
@@ -164,24 +244,39 @@ final class DocumentStore: ObservableObject {
 
     // MARK: - Navigation
 
-    func selectNext() {
-        guard let current = selectedID,
-              let index = documents.firstIndex(where: { $0.id == current }),
-              !documents.isEmpty else {
-            selectedID = documents.first?.id
-            return
+    /// The index of the selected tab in the open order: documents first,
+    /// then terminals.
+    private var currentTabIndex: Int? {
+        if let selectedID, let index = documents.firstIndex(where: { $0.id == selectedID }) {
+            return index
         }
-        selectedID = documents[(index + 1) % documents.count].id
+        if let selectedTerminalID, let index = terminals.firstIndex(where: { $0.id == selectedTerminalID }) {
+            return documents.count + index
+        }
+        return nil
+    }
+
+    private func selectTab(at index: Int) {
+        guard index >= 0, index < documents.count + terminals.count else { return }
+        if index < documents.count {
+            selectedID = documents[index].id
+        } else {
+            selectedTerminalID = terminals[index - documents.count].id
+        }
+    }
+
+    func selectNext() {
+        let count = documents.count + terminals.count
+        guard count > 0 else { return }
+        let index = (currentTabIndex ?? -1) + 1
+        selectTab(at: index % count)
     }
 
     func selectPrevious() {
-        guard let current = selectedID,
-              let index = documents.firstIndex(where: { $0.id == current }),
-              !documents.isEmpty else {
-            selectedID = documents.last?.id
-            return
-        }
-        selectedID = documents[(index - 1 + documents.count) % documents.count].id
+        let count = documents.count + terminals.count
+        guard count > 0 else { return }
+        let index = (currentTabIndex ?? count) - 1
+        selectTab(at: (index + count) % count)
     }
 
     // MARK: - Reloading

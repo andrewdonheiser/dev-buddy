@@ -52,7 +52,9 @@ struct MarkdownViewerApp: App {
                     .disabled(store.selectedID == nil)
                 Button("Close Tab") { store.closeSelected() }
                     .keyboardShortcut("w", modifiers: .command)
-                    .disabled(store.selectedID == nil)
+                    .disabled(!store.canCloseSelected)
+                Button("New Terminal") { store.openTerminalTab() }
+                    .keyboardShortcut("t", modifiers: .command)
                 Divider()
                 Button("Save View…") { promptForNewView() }
                     .disabled(store.documents.isEmpty)

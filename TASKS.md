@@ -1,3 +1,22 @@
+# Terminal Tabs
+
+## Kit & dependencies
+- [x] SwiftTerm dependency (pinned 1.99.3) in `Package.swift`
+
+## App
+- [x] `TerminalTab` model + `DocumentStore` terminal tabs with unified selection
+- [x] `TerminalPane` with SwiftTerm `LocalProcessTerminalView`: login shell in the
+      selected document's folder (or home), title streaming, restart overlay
+- [x] Sessions outlive the SwiftUI view via `TerminalSessionManager`
+- [x] Sidebar: terminal rows, "Terminal" button next to Open File, context menu
+- [x] ⌘T New Terminal; ⌘W, next/previous tab include terminals
+- [x] Tests for terminal tab lifecycle, selection, fallbacks and cycling
+
+## Verify
+- [ ] `swift build`
+- [ ] `swift test`
+- [ ] App launches; ⌘T opens a shell in a tab, typing and closing work
+
 # View Options
 
 ## Kit
