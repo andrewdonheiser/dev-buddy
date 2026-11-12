@@ -36,14 +36,24 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// launch-failure path without mutating the process environment;
     /// `nil` runs the user's default shell from the SHELL variable.
     private let shellPath: String
+    /// The clock that timestamps each launch, so an exec-failure exit
+    /// (reaped near-instantly) can be told apart from a healthy shell the
+    /// user deliberately left via `exit 126`/`exit 127`. Injectable so
+    /// tests can move time past the launch window without sleeping.
+    private let now: () -> Date
+    /// When the shell was last launched, per `now`; `nil` until a launch
+    /// passes pre-launch validation.
+    private var launchedAt: Date?
 
     init(terminal: TerminalTab,
          onTitleChange: (@MainActor (String) -> Void)? = nil,
-         shellPath: String? = nil) {
+         shellPath: String? = nil,
+         now: @escaping () -> Date = { Date() }) {
         self.workingDirectory = terminal.workingDirectory
         self.title = terminal.title
         self.onTitleChange = onTitleChange
         self.shellPath = shellPath ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        self.now = now
         self.view = LocalProcessTerminalView(frame: .zero)
         super.init()
 
@@ -74,6 +84,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
                        suggestion: Self.shellSuggestion)
             return
         }
+        launchedAt = now()
         view.startProcess(executable: shell.path,
                           args: shell.arguments,
                           environment: env,
@@ -107,12 +118,15 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         // the up-front validation cannot catch, so those reach the
         // launch-failure overlay instead of the benign "session ended".
         // The exit code alone cannot distinguish this from a healthy shell
-        // the user deliberately left via `exit 126`/`exit 127`; treating
-        // those as launch failures anyway is the trade-off issue #6
-        // prescribes. The exec-failure branch lets `failLaunch` own the
-        // whole failure-state transition, so `hasExited` is only set here
-        // on the normal-exit path.
-        if let code = exitCode, code == 126 || code == 127 {
+        // the user deliberately left via `exit 126`/`exit 127`, so a 126/127
+        // termination only counts as an exec failure while it arrives
+        // within the launch window: a failed exec is reaped
+        // near-instantly, a deliberate exit almost never is. The
+        // exec-failure branch lets `failLaunch` own the whole
+        // failure-state transition, so `hasExited` is only set here on the
+        // normal-exit path.
+        if let code = exitCode, code == 126 || code == 127, let launchedAt,
+           now().timeIntervalSince(launchedAt) <= Self.execFailureWindow {
             // Resolved the same way as the pre-launch validation message,
             // so the two failure reasons always name the same executable.
             let shell = Self.launchConfiguration(for: shellPath)
@@ -162,6 +176,12 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         failureSuggestion = suggestion
         announceEnd(failed: true)
     }
+
+    /// How long after launch a 126/127 termination still counts as an exec
+    /// failure (see `processTerminated`): a failed exec is reaped
+    /// near-instantly, while a healthy shell the user deliberately leaves
+    /// via `exit 126`/`exit 127` almost never ends this quickly.
+    private static let execFailureWindow: TimeInterval = 2
 
     /// Runs the configured shell as a login shell — so the user's PATH
     /// (Homebrew, etc.) is available to a GUI app — inside the tab's working

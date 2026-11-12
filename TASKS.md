@@ -86,6 +86,10 @@
       validation, fails at exec) reaches the failure state; a shell that
       starts and exits nonzero stays on the normal-exit path; the 126 branch
       is pinned by driving the termination callback directly
+- [x] Only classify 126/127 as an exec failure within a short window after
+      launch, so a healthy shell the user deliberately leaves via
+      `exit 126`/`exit 127` keeps the normal-exit path (clock injectable for
+      the tests, which pin both sides of the window)
 
 ## Verify
 - [ ] `swift build` (not runnable in this sandbox: no macOS toolchain)

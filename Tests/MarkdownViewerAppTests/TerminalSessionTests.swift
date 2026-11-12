@@ -79,8 +79,11 @@ struct TerminalSessionTests {
         // (a permission problem is caught by pre-launch validation), so this
         // drives the termination callback SwiftTerm invokes — directly, with
         // the other exec-failure exit code — pinning that half of the check.
+        // The clock is fixed so the callback is deterministically inside the
+        // launch window, however long the real process took to exit.
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false")
+        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false",
+                                      now: { Date(timeIntervalSinceReferenceDate: 0) })
         // The wait is asserted so the test cannot pass vacuously if the
         // real termination callback stops firing: `failureReason` is nil
         // only while `/usr/bin/false` is still running.
@@ -93,6 +96,29 @@ struct TerminalSessionTests {
 
         #expect(session.failureReason == "The shell at /usr/bin/false could not be run (it exited with code 126 at launch).")
         #expect(session.failureSuggestion != nil)
+    }
+
+    @Test("a 126/127 exit after the launch window is a normal exit")
+    func execFailureExitCodeAfterLaunchWindowIsNormalExit() async {
+        // A healthy shell the user deliberately leaves via `exit 127` — or
+        // after a command that returned 126/127 — must not show the
+        // launch-failure overlay. The clock is injected and advanced past
+        // the launch window, standing in for a session that ran for a
+        // while before the user typed `exit`.
+        var currentTime = Date(timeIntervalSinceReferenceDate: 0)
+        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
+        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false",
+                                      now: { currentTime })
+
+        #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
+        #expect(session.failureReason == nil)
+
+        // Well past the launch window, as a deliberate `exit 127` would be.
+        currentTime = currentTime.addingTimeInterval(60)
+        session.processTerminated(source: session.view, exitCode: 127)
+
+        #expect(session.failureReason == nil)
+        #expect(session.failureSuggestion == nil)
     }
 
     @Test("a shell that starts and then exits nonzero is a normal exit")
