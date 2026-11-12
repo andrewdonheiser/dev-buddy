@@ -47,12 +47,23 @@ struct MarkdownViewerApp: App {
                 Button("Previous Tab") { store.selectPrevious() }
                     .keyboardShortcut("[", modifiers: [.command, .shift])
                 Divider()
-                Button("Reload Tab") { store.refreshSelected() }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(store.selectedID == nil)
-                Button("Close Tab") { store.closeSelected() }
-                    .keyboardShortcut("w", modifiers: .command)
-                    .disabled(store.selectedID == nil)
+                // ⌘R acts on the visible tab. While a terminal is showing, the
+                // selected document is hidden behind it, so the command waits
+                // rather than reloading content the user cannot see.
+                Button("Reload Tab") {
+                    store.refreshSelected()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!store.canRefreshSelected)
+                // The label reflects what ⌘W will close: the visible
+                // terminal takes precedence over its document.
+                Button(store.selectedTerminalID == nil ? "Close Tab" : "Close Terminal") {
+                    store.closeSelected()
+                }
+                .keyboardShortcut("w", modifiers: .command)
+                .disabled(!store.canCloseSelected)
+                Button("New Terminal") { store.openTerminalTab() }
+                    .keyboardShortcut("t", modifiers: .command)
                 Divider()
                 Button("Save View…") { promptForNewView() }
                     .disabled(store.documents.isEmpty)

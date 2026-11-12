@@ -37,24 +37,49 @@ struct MainView: View {
         .onOpenURL { url in
             store.open(url: url)
         }
+        .alert("Close this terminal?",
+               isPresented: Binding(
+                   get: { store.pendingCloseTerminalID != nil },
+                   set: { if !$0 { store.cancelCloseTerminal() } }
+               ),
+               presenting: store.pendingCloseTerminal) { _ in
+            Button("Close Terminal", role: .destructive) { store.confirmCloseTerminal() }
+            Button("Cancel", role: .cancel) { store.cancelCloseTerminal() }
+        } message: { terminal in
+            Text("\"\(terminal.title)\" — \(terminal.workingDirectory.path). The shell and its running programs will be terminated.")
+        }
     }
 
     @ViewBuilder
     private var detail: some View {
-        if let document = store.selectedDocument {
-            if chatVisible {
-                HSplitView {
-                    documentColumn(for: document)
-                    ChatSidebarView(documentPath: document.url.path,
-                                    documentName: document.fileName,
-                                    documentText: document.markdown)
-                        .frame(minWidth: 300, idealWidth: 380, maxWidth: 560)
-                }
-            } else {
-                documentColumn(for: document)
-            }
+        if let terminal = store.selectedTerminal {
+            // A terminal tab keeps the chat panel on screen, bound to the
+            // selected document when one is open.
+            chatSplit(TerminalPane(terminal: terminal)
+                .id(terminal.id),
+                document: store.selectedDocument)
+        } else if let document = store.selectedDocument {
+            chatSplit(documentColumn(for: document), document: document)
         } else {
             EmptyStateView()
+        }
+    }
+
+    /// The chat panel beside `content`, sharing `document`'s chat context.
+    /// Used by both the document and terminal detail columns so the panel's
+    /// frame and bindings live in one place.
+    @ViewBuilder
+    private func chatSplit<Content: View>(_ content: Content, document: OpenDocument?) -> some View {
+        if chatVisible, let document {
+            HSplitView {
+                content
+                ChatSidebarView(documentPath: document.url.path,
+                                documentName: document.fileName,
+                                documentText: document.markdown)
+                    .frame(minWidth: 300, idealWidth: 380, maxWidth: 560)
+            }
+        } else {
+            content
         }
     }
 
@@ -120,6 +145,10 @@ private struct EmptyStateView: View {
                 store.presentOpenPanel()
             }
             .keyboardShortcut("o", modifiers: .command)
+            Button("New Terminal") {
+                store.openTerminalTab()
+            }
+            .keyboardShortcut("t", modifiers: .command)
             Text("or drag a .md file here")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
