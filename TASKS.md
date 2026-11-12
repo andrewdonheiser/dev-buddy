@@ -10,7 +10,7 @@
 - [x] Sessions outlive the SwiftUI view via `TerminalSessionManager`
 - [x] Sidebar: terminal rows, "New Terminal" button next to Open File, context menu
 - [x] ⌘T New Terminal; ⌘W, next/previous tab include terminals
-- [x] Tests for terminal tab lifecycle, selection, fallbacks and cycling
+- [x] Tests for terminal tab lifecycle, selection, fallbacks, cycling and sidebar terminal rows
 
 ## Verify
 - [ ] `swift build`

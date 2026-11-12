@@ -15,9 +15,13 @@ struct TerminalTabTests {
     }
 
     /// An isolated store per test, mirroring the fixture pattern the other
-    /// suites use, so no test touches the shared singleton.
+    /// suites use, so no test touches the shared singleton. Opening a
+    /// document registers it with the label store, so the registry persists
+    /// to a scratch file instead of the real labels.json.
     private func makeStore() -> DocumentStore {
-        DocumentStore()
+        let scratchLabels = FileManager.default.temporaryDirectory
+            .appendingPathComponent("terminal-tests-labels-\(UUID().uuidString).json")
+        return DocumentStore(labels: LabelStore(storageURL: scratchLabels))
     }
 
     @Test("terminals open as top-level tabs and close cleanly")

@@ -42,10 +42,35 @@ enum SidebarItem: Identifiable {
     /// Prefix marking a terminal tab row.
     static let terminalIDPrefix = "terminal:"
 
+    /// The row identity encoding a terminal tab: the sidebar's List
+    /// selection bridges through String, so the prefix distinguishes
+    /// terminal ids from document paths.
+    static func terminalRowID(for id: TerminalTab.ID) -> String {
+        terminalIDPrefix + id.uuidString
+    }
+
+    /// The terminal tab id encoded in a row identity, if the row is one.
+    static func terminalID(fromRowID rowID: String) -> TerminalTab.ID? {
+        guard rowID.hasPrefix(terminalIDPrefix) else { return nil }
+        return UUID(uuidString: String(rowID.dropFirst(terminalIDPrefix.count)))
+    }
+
+    /// The terminal tabs a sidebar search surfaces: terminals match by title
+    /// or working directory and carry no labels, so a label-only filter (an
+    /// empty query) excludes them.
+    static func terminals(matchingQuery query: String, in terminals: [TerminalTab]) -> [TerminalTab] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        return terminals.filter {
+            $0.title.localizedCaseInsensitiveContains(trimmed)
+                || $0.workingDirectory.path.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
     var id: String {
         switch self {
         case .open(let document, _): return document.url.path
-        case .terminal(let terminal): return Self.terminalIDPrefix + terminal.id.uuidString
+        case .terminal(let terminal): return Self.terminalRowID(for: terminal.id)
         case .result(let file): return file.path
         }
     }
@@ -273,14 +298,13 @@ struct TabSidebarView: View {
         Binding(
             get: {
                 if let terminal = store.selectedTerminal {
-                    return SidebarItem.terminalIDPrefix + terminal.id.uuidString
+                    return SidebarItem.terminalRowID(for: terminal.id)
                 }
                 return store.selectedDocument?.url.path
             },
             set: { id in
                 guard let id else { return }
-                if id.hasPrefix(SidebarItem.terminalIDPrefix),
-                   let terminalID = UUID(uuidString: String(id.dropFirst(SidebarItem.terminalIDPrefix.count))) {
+                if let terminalID = SidebarItem.terminalID(fromRowID: id) {
                     store.selectTerminal(terminalID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
                     store.selectDocument(document.id)
@@ -304,14 +328,8 @@ struct TabSidebarView: View {
                 return .result(file)
             }
             // Terminal tabs match by title or directory; they carry no labels.
-            if !trimmedQuery.isEmpty {
-                results += store.terminals
-                    .filter {
-                        $0.title.localizedCaseInsensitiveContains(trimmedQuery)
-                            || $0.workingDirectory.path.localizedCaseInsensitiveContains(trimmedQuery)
-                    }
-                    .map { SidebarItem.terminal($0) }
-            }
+            results += SidebarItem.terminals(matchingQuery: trimmedQuery, in: store.terminals)
+                .map { SidebarItem.terminal($0) }
             return results
         }
         var openItems = orderedDocuments.map { document in
@@ -330,14 +348,19 @@ struct TabSidebarView: View {
         return LabelRegistry.sorted(files, by: order).compactMap { documentsByPath[$0.path] }
     }
 
+    /// The heading over the open-tab section: one stable name regardless of
+    /// the tab mix, so the header the user learned never renames itself as
+    /// terminals come and go.
+    static func sectionTitle(documentCount: Int, terminalCount: Int) -> String {
+        documentCount == 0 && terminalCount == 0 ? "No Files" : "Open Tabs"
+    }
+
     private var sectionTitle: String {
         if isSearching {
             return items.count == 1 ? "1 Result" : "\(items.count) Results"
         }
-        // The section lists documents and terminal tabs together, so the
-        // header must not call its terminal rows files.
-        if store.documents.isEmpty { return store.terminals.isEmpty ? "No Files" : "Terminals" }
-        return store.terminals.isEmpty ? "Open Files" : "Open Tabs"
+        return Self.sectionTitle(documentCount: store.documents.count,
+                                 terminalCount: store.terminals.count)
     }
 
     private func filterByLabel(_ name: String) {

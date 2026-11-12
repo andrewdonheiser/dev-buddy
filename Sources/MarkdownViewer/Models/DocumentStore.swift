@@ -40,6 +40,12 @@ final class DocumentStore: ObservableObject {
     private let hasLiveTerminalProcess: @MainActor (TerminalTab.ID) -> Bool
     private let removeTerminalSession: @MainActor (TerminalTab.ID) -> Void
 
+    /// The registry that records the files this store opens. Injected
+    /// (defaulting to the shared store, like the terminal seams above) so
+    /// tests can open documents against a scratch registry instead of the
+    /// one persisted in the user's Application Support.
+    private let labels: LabelStore
+
     private var watchers: [OpenDocument.ID: FileWatcher] = [:]
     private let renderer = HTMLRenderer()
     private let options = ViewOptions.shared
@@ -49,9 +55,11 @@ final class DocumentStore: ObservableObject {
     /// sharing the singleton, mirroring the other stores' injectable
     /// initializers.
     init(hasLiveTerminalProcess: @escaping @MainActor (TerminalTab.ID) -> Bool = { TerminalSessionManager.shared.hasLiveProcess($0) },
-         removeTerminalSession: @escaping @MainActor (TerminalTab.ID) -> Void = { TerminalSessionManager.shared.removeSession($0) }) {
+         removeTerminalSession: @escaping @MainActor (TerminalTab.ID) -> Void = { TerminalSessionManager.shared.removeSession($0) },
+         labels: LabelStore = .shared) {
         self.hasLiveTerminalProcess = hasLiveTerminalProcess
         self.removeTerminalSession = removeTerminalSession
+        self.labels = labels
         // Re-render every document when the reading width or text size changes.
         options.$contentWidth
             .combineLatest(options.$fontSize)
@@ -174,7 +182,6 @@ final class DocumentStore: ObservableObject {
     }
 
     func open(urls: [URL]) {
-        let labels = LabelStore.shared
         for url in urls {
             let standardized = url.standardizedFileURL
 

@@ -45,6 +45,17 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         environment["TERM_PROGRAM"] = "MarkdownViewer"
         let env = environment.map { "\($0.key)=\($0.value)" }.sorted()
         let shell = Self.launchConfiguration()
+        // SwiftTerm reports a failed exec — e.g. a missing shell — as an
+        // ordinary termination with exit code 127, not as a launch failure,
+        // so the executable is validated up front: an unstartable shell must
+        // reach the launch-failure overlay, not the normal-exit one.
+        guard FileManager.default.isExecutableFile(atPath: shell.path) else {
+            hasExited = true
+            failureReason = "The shell at \(shell.path) could not be found or run."
+            failureSuggestion = Self.shellSuggestion
+            announceEnd(failed: true)
+            return
+        }
         view.startProcess(executable: shell.path,
                           args: shell.arguments,
                           environment: env,
@@ -84,7 +95,6 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     func processFailedToStart(source: TerminalView, error: LocalProcessError) {
         hasExited = true
         failureReason = Self.describe(error)
-        failureSuggestion = Self.suggestion(for: error)
         announceEnd(failed: true)
     }
 
@@ -120,18 +130,11 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         }
     }
 
-    /// A next step for the launch failures that can have one. Spawning fails
-    /// this way when the executable is missing or invalid, and the shell path
-    /// comes from the SHELL environment variable — the other causes say the
-    /// terminal, not the shell, is the problem.
-    private static func suggestion(for error: LocalProcessError) -> String? {
-        switch error {
-        case .forkFailed:
-            "Check that the SHELL environment variable points to an installed shell."
-        case .alreadyRunning, .notRunning, .writeChannelFailed, .writeFailed:
-            nil
-        }
-    }
+    /// The next step when the shell path itself is the problem. The path
+    /// comes from the SHELL environment variable, and an unstartable shell
+    /// is caught before launch (the other failure causes say the terminal,
+    /// not the shell, is the problem, so they carry no suggestion).
+    private static let shellSuggestion = "Check that the SHELL environment variable points to an installed shell."
 }
 
 /// Keeps one session per terminal tab for the life of the app.
