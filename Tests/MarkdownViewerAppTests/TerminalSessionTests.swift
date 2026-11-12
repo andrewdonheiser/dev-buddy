@@ -47,9 +47,14 @@ struct TerminalSessionTests {
     func execFailureAfterValidationFails() async throws {
         // An executable-marked script whose `#!` interpreter is missing
         // passes every pre-launch check (exists, not a directory,
-        // executable bit) yet fails at exec: SwiftTerm reports that as an
-        // ordinary termination with exit code 127, which the session must
-        // route to the failure overlay, not the normal-exit one.
+        // executable bit) yet fails at exec. SwiftTerm (1.99.3) launches
+        // via forkpty and reports only fork/write-channel failures through
+        // `processFailedToStart`; a failed exec in the child exits 127 and
+        // is reaped as an ordinary termination — verified against the
+        // pinned dependency source, which documents that an exec failure
+        // is delivered through `processTerminated` with exit code 127 —
+        // so the session must route it to the failure overlay, not the
+        // normal-exit one.
         let script = FileManager.default.temporaryDirectory
             .appendingPathComponent("bad-interpreter-\(UUID().uuidString)")
         try "#!/nonexistent/interpreter-\(UUID().uuidString)\n"
@@ -61,7 +66,7 @@ struct TerminalSessionTests {
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
         let session = TerminalSession(terminal: terminal, shellPath: script.path)
 
-        await waitUntil(timeout: .seconds(5)) { session.hasExited }
+        #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
 
         #expect(session.hasExited)
         #expect(session.failureReason == "The shell at \(script.path) could not be run (it exited with code 127 at launch).")
@@ -76,7 +81,10 @@ struct TerminalSessionTests {
         // the other exec-failure exit code — pinning that half of the check.
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
         let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false")
-        await waitUntil(timeout: .seconds(5)) { session.hasExited }
+        // The wait is asserted so the test cannot pass vacuously if the
+        // real termination callback stops firing: `failureReason` is nil
+        // only while `/usr/bin/false` is still running.
+        #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
 
         // /usr/bin/false ends on its own first, on the normal-exit path.
         #expect(session.failureReason == nil)
@@ -95,7 +103,7 @@ struct TerminalSessionTests {
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
         let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false")
 
-        await waitUntil(timeout: .seconds(5)) { session.hasExited }
+        #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
 
         #expect(session.hasExited)
         #expect(session.failureReason == nil)

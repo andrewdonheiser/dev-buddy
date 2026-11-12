@@ -101,7 +101,6 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     }
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
-        hasExited = true
         // A shell that ran and then exited nonzero (`exit 1`) ended
         // normally. Exit codes 126 and 127 mean the exec itself failed —
         // bad interpreter, corrupt or wrong-architecture binary — which
@@ -110,7 +109,9 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         // The exit code alone cannot distinguish this from a healthy shell
         // the user deliberately left via `exit 126`/`exit 127`; treating
         // those as launch failures anyway is the trade-off issue #6
-        // prescribes.
+        // prescribes. The exec-failure branch lets `failLaunch` own the
+        // whole failure-state transition, so `hasExited` is only set here
+        // on the normal-exit path.
         if let code = exitCode, code == 126 || code == 127 {
             // Resolved the same way as the pre-launch validation message,
             // so the two failure reasons always name the same executable.
@@ -119,6 +120,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
                        suggestion: Self.shellSuggestion)
             return
         }
+        hasExited = true
         announceEnd(failed: false)
     }
 
