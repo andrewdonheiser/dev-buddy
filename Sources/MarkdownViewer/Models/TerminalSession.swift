@@ -16,8 +16,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     private(set) var view: LocalProcessTerminalView
 
     /// The title the running program reports, or the working directory name
-    /// until it does.
-    @Published var title: String
+    /// until it does; assignments flow through `setTerminalTitle`.
+    @Published private(set) var title: String
     @Published private(set) var hasExited = false
     /// A plain-language reason the shell failed to launch, set on any of
     /// the three launch-failure paths — pre-launch validation, a process
@@ -206,10 +206,10 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         }
     }
 
-    /// The next step when the shell path itself is the problem. The path
+    /// The next step when the shell path itself is the problem: the path
     /// comes from the SHELL environment variable, and an unstartable shell
-    /// is caught before launch (the other failure causes say the terminal,
-    /// not the shell, is the problem, so they carry no suggestion).
+    /// is caught before launch (the other failure causes carry no
+    /// suggestion, since they say the terminal, not the shell, is at fault).
     private static let shellSuggestion = "Check that the SHELL environment variable points to an installed shell."
 }
 
@@ -219,15 +219,28 @@ final class TerminalSessionManager {
 
     static let shared = TerminalSessionManager()
 
+    /// Creates a tab's session. Injectable through the initializer
+    /// (mirroring `DocumentStore`'s seams) so tests can exercise the reuse
+    /// logic with bogus-shell sessions instead of spawning real processes.
+    typealias SessionFactory = @MainActor (TerminalTab, (@MainActor (String) -> Void)?) -> TerminalSession
+
     private var sessions: [TerminalTab.ID: TerminalSession] = [:]
+    private let sessionFactory: SessionFactory
+
+    /// Creates a manager, defaulting to real terminal sessions.
+    init(sessionFactory: @escaping SessionFactory = { terminal, onTitleChange in
+        TerminalSession(terminal: terminal, onTitleChange: onTitleChange)
+    }) {
+        self.sessionFactory = sessionFactory
+    }
 
     /// Returns the tab's session, creating it (and spawning the shell) on
     /// first request. `onTitleChange` receives title updates from the running
     /// program and is only stored when a session is created.
-    func session(for terminal: TerminalTab,
+    func session(_ terminal: TerminalTab,
                  onTitleChange: (@MainActor (String) -> Void)? = nil) -> TerminalSession {
         if let existing = sessions[terminal.id] { return existing }
-        let session = TerminalSession(terminal: terminal, onTitleChange: onTitleChange)
+        let session = sessionFactory(terminal, onTitleChange)
         sessions[terminal.id] = session
         return session
     }
