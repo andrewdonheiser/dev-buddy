@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 import SwiftTerm
 
 /// The running terminal for one terminal tab: its `LocalProcessTerminalView`
@@ -130,8 +131,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         }
         // Post from the terminal view itself: a nil element may not be
         // delivered to assistive technology.
-        NSAccessibility.post(element: view, notification: .announcement,
-                             userInfo: [.announcement: message])
+        AccessibilityNotification.Announcement(message).post()
     }
 
     // MARK: - Helpers
