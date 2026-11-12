@@ -27,7 +27,7 @@ struct TerminalPane: View {
                 // tab list, receives the session's title updates, and hides
                 // the session manager behind its injected seam — the view
                 // never reaches into a shared singleton itself.
-                session = store.session(for: terminal)
+                session = store.session(terminal.id)
             }
         }
     }

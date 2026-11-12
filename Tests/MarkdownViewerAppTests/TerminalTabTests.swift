@@ -61,6 +61,30 @@ struct TerminalTabTests {
         #expect(store.selectedDocument?.id == document.id)
     }
 
+    @Test("session title changes stream back into the tab list")
+    func sessionTitleChangeStreamsIntoTabList() {
+        // A bogus shell path keeps the stub session from spawning a process.
+        let stub = TerminalSession(
+            terminal: TerminalTab(workingDirectory: FileManager.default.temporaryDirectory),
+            shellPath: "/nonexistent/shell-\(UUID().uuidString)")
+        var captured: (@MainActor (String) -> Void)?
+        let store = DocumentStore(
+            terminalSessionProvider: { _, onTitleChange in
+                captured = onTitleChange
+                return stub
+            })
+        defer { store.closeAll() }
+
+        let terminal = store.openTerminalTab()
+        #expect(store.session(terminal.id) === stub)
+        // An id that is not an open tab has no session.
+        #expect(store.session(UUID()) === nil)
+
+        captured?("vim — notes")
+
+        #expect(store.terminals.first { $0.id == terminal.id }?.title == "vim — notes")
+    }
+
     @Test("terminals default to the home folder when no document is open")
     func homeFallback() {
         let store = makeStore()
@@ -217,6 +241,42 @@ struct TerminalTabTests {
         #expect(store.terminals.isEmpty)
         #expect(store.selectedTerminal == nil)
         #expect(store.selectedDocument?.id == document.id)
+    }
+
+    @Test("⌘R is disabled while a terminal tab is visible")
+    func canRefreshSelectedDisablesWhileTerminalVisible() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        #expect(store.canRefreshSelected)
+
+        store.openTerminalTab()
+
+        // The visible terminal hides the document ⌘R would reload, but ⌘W
+        // still has the terminal to close.
+        #expect(!store.canRefreshSelected)
+        #expect(store.canCloseSelected)
+    }
+
+    @Test("⌘R comes back once the terminal pane is dismissed")
+    func canRefreshSelectedReturnsWhenDocumentSelected() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let document = try #require(store.selectedDocument)
+        store.openTerminalTab()
+        #expect(!store.canRefreshSelected)
+
+        store.selectDocument(document.id)
+
+        #expect(store.selectedTerminal == nil)
+        #expect(store.canRefreshSelected)
     }
 
     @Test("closing a terminal without a live process skips the confirmation")
