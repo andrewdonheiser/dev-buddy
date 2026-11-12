@@ -12,11 +12,24 @@ import Testing
 @MainActor
 struct TerminalSessionTests {
 
+    /// A terminal tab rooted at the system temporary directory.
+    private func makeTerminal() -> TerminalTab {
+        TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
+    }
+
+    /// A session against a bogus shell path (or the given one), so no
+    /// process ever spawns.
+    private func makeSession(terminal: TerminalTab? = nil,
+                             onTitleChange: (@MainActor (String) -> Void)? = nil,
+                             shellPath: String? = nil) -> TerminalSession {
+        TerminalSession(terminal: terminal ?? makeTerminal(),
+                        onTitleChange: onTitleChange,
+                        shellPath: shellPath ?? "/nonexistent/shell-\(UUID().uuidString)")
+    }
+
     @Test("a bogus shell path produces the launch-failure state")
     func bogusShellPathFailsToLaunch() {
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal,
-                                      shellPath: "/nonexistent/shell-binary-\(UUID().uuidString)")
+        let session = makeSession()
 
         #expect(session.hasExited)
         #expect(session.failureReason != nil)
@@ -35,9 +48,7 @@ struct TerminalSessionTests {
     func directoryShellPathFailsToLaunch() {
         // Directories carry the POSIX x bit (search permission), so the
         // executable check alone would let one through to a failed exec.
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal,
-                                      shellPath: FileManager.default.temporaryDirectory.path)
+        let session = makeSession(shellPath: FileManager.default.temporaryDirectory.path)
 
         #expect(session.hasExited)
         #expect(session.failureReason != nil)
@@ -47,10 +58,7 @@ struct TerminalSessionTests {
     @Test("setTerminalTitle publishes the title and forwards it to the onTitleChange callback")
     func setTerminalTitleStreamsToCallback() {
         var received: [String] = []
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal,
-                                      onTitleChange: { received.append($0) },
-                                      shellPath: "/nonexistent/shell-\(UUID().uuidString)")
+        let session = makeSession(onTitleChange: { received.append($0) })
 
         session.setTerminalTitle(source: session.view, title: "vim — notes")
 
@@ -69,11 +77,9 @@ struct TerminalSessionTests {
         // The factory builds real sessions against a bogus shell path, so
         // the manager's own reuse logic runs without spawning a process.
         let manager = TerminalSessionManager(sessionFactory: { terminal, onTitleChange in
-            TerminalSession(terminal: terminal,
-                            onTitleChange: onTitleChange,
-                            shellPath: "/nonexistent/shell-\(UUID().uuidString)")
+            makeSession(terminal: terminal, onTitleChange: onTitleChange)
         })
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
+        let terminal = makeTerminal()
         var firstTitles: [String] = []
         var secondTitles: [String] = []
 
