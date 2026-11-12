@@ -17,19 +17,6 @@
 - [ ] `swift test`
 - [ ] App launches; ⌘T opens a shell in a tab, typing and closing work
 
-# Terminal exec-failure overlay
-
-- [x] Route exit codes 126/127 from `processTerminated` to the launch-failure
-      overlay (reason + suggestion) instead of the benign "session ended",
-      covering shells that pass pre-launch validation but fail at exec
-- [x] Tests: an executable script with a missing `#!` interpreter (passes
-      validation, fails at exec) reaches the failure state; a shell that
-      starts and exits nonzero stays on the normal-exit path
-
-## Verify
-- [ ] `swift build` (not runnable in this sandbox: no macOS toolchain)
-- [ ] `swift test` (not runnable in this sandbox: no macOS toolchain)
-
 # View Options
 
 ## Kit
@@ -90,4 +77,16 @@
 - [ ] Keychain reads off the main thread (a locked keychain can block the UI)
 - [ ] Stop a document's stream when its tab closes; trim very long histories
 
+# Terminal exec-failure overlay
 
+- [x] Route exit codes 126/127 from `processTerminated` to the launch-failure
+      overlay (reason + suggestion) instead of the benign "session ended",
+      covering shells that pass pre-launch validation but fail at exec
+- [x] Tests: an executable script with a missing `#!` interpreter (passes
+      validation, fails at exec) reaches the failure state; a shell that
+      starts and exits nonzero stays on the normal-exit path; the 126 branch
+      is pinned by driving the termination callback directly
+
+## Verify
+- [ ] `swift build` (not runnable in this sandbox: no macOS toolchain)
+- [ ] `swift test` (not runnable in this sandbox: no macOS toolchain)

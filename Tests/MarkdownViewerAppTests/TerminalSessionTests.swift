@@ -61,10 +61,29 @@ struct TerminalSessionTests {
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
         let session = TerminalSession(terminal: terminal, shellPath: script.path)
 
-        await waitUntilExited(session)
+        await waitUntil(timeout: .seconds(5)) { session.hasExited }
 
         #expect(session.hasExited)
-        #expect(session.failureReason != nil)
+        #expect(session.failureReason == "The shell at \(script.path) could not be run (it exited with code 127 at launch).")
+        #expect(session.failureSuggestion != nil)
+    }
+
+    @Test("an exec-failure exit code of 126 also reports the failure state")
+    func execFailureExitCode126ReportsFailureState() async {
+        // A real spawn cannot be made to fail exec with 126 deterministically
+        // (a permission problem is caught by pre-launch validation), so this
+        // drives the termination callback SwiftTerm invokes — directly, with
+        // the other exec-failure exit code — pinning that half of the check.
+        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
+        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false")
+        await waitUntil(timeout: .seconds(5)) { session.hasExited }
+
+        // /usr/bin/false ends on its own first, on the normal-exit path.
+        #expect(session.failureReason == nil)
+
+        session.processTerminated(source: session.view, exitCode: 126)
+
+        #expect(session.failureReason == "The shell at /usr/bin/false could not be run (it exited with code 126 at launch).")
         #expect(session.failureSuggestion != nil)
     }
 
@@ -76,20 +95,10 @@ struct TerminalSessionTests {
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
         let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false")
 
-        await waitUntilExited(session)
+        await waitUntil(timeout: .seconds(5)) { session.hasExited }
 
         #expect(session.hasExited)
         #expect(session.failureReason == nil)
         #expect(session.failureSuggestion == nil)
-    }
-}
-
-/// Waits for the session's asynchronous termination callback, bounded so a
-/// missing callback fails the assertions instead of hanging the suite.
-@MainActor
-private func waitUntilExited(_ session: TerminalSession, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !session.hasExited && Date() < deadline {
-        try? await Task.sleep(nanoseconds: 20_000_000)
     }
 }
