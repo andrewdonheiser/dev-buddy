@@ -7,7 +7,7 @@ import Testing
 /// instead of spawning it, exec-failure exit codes route to the failure
 /// overlay, title updates stream through `setTerminalTitle`, and the
 /// manager keeps one session (and one title callback) per tab. The shell
-/// path or session factory is injected, so most tests never spawn a real
+/// path, clock, or session factory is injected, so most tests never spawn a real
 /// process; the exit-code cases spawn only a short-lived child that fails
 /// exec or terminates immediately.
 @Suite("Terminal session")
@@ -20,13 +20,16 @@ struct TerminalSessionTests {
     }
 
     /// A session against a bogus shell path (or the given one), so no
-    /// process ever spawns.
+    /// process ever spawns unless the test asks for one; `now` injects the
+    /// clock the launch-window tests need.
     private func makeSession(terminal: TerminalTab? = nil,
                              onTitleChange: (@MainActor (String) -> Void)? = nil,
-                             shellPath: String? = nil) -> TerminalSession {
+                             shellPath: String? = nil,
+                             now: @escaping () -> Date = { Date() }) -> TerminalSession {
         TerminalSession(terminal: terminal ?? makeTerminal(),
                         onTitleChange: onTitleChange,
-                        shellPath: shellPath ?? "/nonexistent/shell-\(UUID().uuidString)")
+                        shellPath: shellPath ?? "/nonexistent/shell-\(UUID().uuidString)",
+                        now: now)
     }
 
     @Test("a bogus shell path produces the launch-failure state")
@@ -77,13 +80,12 @@ struct TerminalSessionTests {
                                               ofItemAtPath: script.path)
         defer { try? FileManager.default.removeItem(at: script) }
 
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal, shellPath: script.path)
+        let session = makeSession(shellPath: script.path)
 
         #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
 
         #expect(session.hasExited)
-        #expect(session.failureReason == "The shell at \(script.path) could not be run (it exited with code 127 at launch).")
+        #expect(session.failureReason == "The shell at \(script.path) exited with code 127 immediately after launch.")
         #expect(session.failureSuggestion != nil)
     }
 
@@ -95,9 +97,8 @@ struct TerminalSessionTests {
         // the other exec-failure exit code — pinning that half of the check.
         // The clock is fixed so the callback is deterministically inside the
         // launch window, however long the real process took to exit.
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false",
-                                      now: { Date(timeIntervalSinceReferenceDate: 0) })
+        let session = makeSession(shellPath: "/usr/bin/false",
+                                  now: { Date(timeIntervalSinceReferenceDate: 0) })
         // The wait is asserted so the test cannot pass vacuously if the
         // real termination callback stops firing: `failureReason` is nil
         // only while `/usr/bin/false` is still running.
@@ -108,7 +109,7 @@ struct TerminalSessionTests {
 
         session.processTerminated(source: session.view, exitCode: 126)
 
-        #expect(session.failureReason == "The shell at /usr/bin/false could not be run (it exited with code 126 at launch).")
+        #expect(session.failureReason == "The shell at /usr/bin/false exited with code 126 immediately after launch.")
         #expect(session.failureSuggestion != nil)
     }
 
@@ -120,9 +121,7 @@ struct TerminalSessionTests {
         // the launch window, standing in for a session that ran for a
         // while before the user typed `exit`.
         var currentTime = Date(timeIntervalSinceReferenceDate: 0)
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false",
-                                      now: { currentTime })
+        let session = makeSession(shellPath: "/usr/bin/false", now: { currentTime })
 
         #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
         #expect(session.failureReason == nil)
@@ -140,8 +139,7 @@ struct TerminalSessionTests {
         // /usr/bin/false starts fine and exits 1 — like a user running
         // `exit 1` — so it must keep the normal-exit path: only exit codes
         // 126 and 127 (the exec itself failed) are launch failures.
-        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
-        let session = TerminalSession(terminal: terminal, shellPath: "/usr/bin/false")
+        let session = makeSession(shellPath: "/usr/bin/false")
 
         #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
 

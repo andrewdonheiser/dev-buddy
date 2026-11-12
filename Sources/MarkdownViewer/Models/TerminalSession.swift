@@ -21,8 +21,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     @Published private(set) var hasExited = false
     /// A plain-language reason the shell failed to launch, set on any of
     /// the three launch-failure paths — pre-launch validation, a process
-    /// that failed to start, or an exec-failure exit code (126/127) — never
-    /// for a normal exit.
+    /// that failed to start, or an exec-failure exit code
+    /// (`execFailureExitCodes`) — never for a normal exit.
     @Published private(set) var failureReason: String?
     /// A next step for the launch failures that have one, shown alongside the
     /// reason instead of a hint that may not apply.
@@ -97,9 +97,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// of an unstartable shell fails the same way instead of spawning it.
     func restart() {
         guard hasExited else { return }
-        hasExited = false
-        failureReason = nil
-        failureSuggestion = nil
+        resetLaunchState()
         startProcess()
     }
 
@@ -125,13 +123,16 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         // exec-failure branch lets `failLaunch` own the whole
         // failure-state transition, so `hasExited` is only set here on the
         // normal-exit path.
-        if let code = exitCode, code == 126 || code == 127, let launchedAt,
+        if let code = exitCode, Self.execFailureExitCodes.contains(code), let launchedAt,
            now().timeIntervalSince(launchedAt) <= Self.execFailureWindow {
             // Resolved the same way as the pre-launch validation message,
             // so the two failure reasons always name the same executable.
+            // The reason is worded as an immediate exit rather than a
+            // broken executable: a login shell whose startup files abort
+            // with one of these codes inside the window lands here too.
             let shell = Self.launchConfiguration(for: shellPath)
-            failLaunch(reason: "The shell at \(shell.path) could not be run (it exited with code \(code) at launch).",
-                       suggestion: Self.shellSuggestion)
+            failLaunch(reason: "The shell at \(shell.path) exited with code \(code) immediately after launch.",
+                       suggestion: Self.execFailureSuggestion)
             return
         }
         hasExited = true
@@ -177,10 +178,27 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         announceEnd(failed: true)
     }
 
-    /// How long after launch a 126/127 termination still counts as an exec
-    /// failure (see `processTerminated`): a failed exec is reaped
-    /// near-instantly, while a healthy shell the user deliberately leaves
-    /// via `exit 126`/`exit 127` almost never ends this quickly.
+    /// Clears the launch-failure state before a restart — the inverse of
+    /// `failLaunch`'s transition, so resetting stays symmetric with
+    /// setting: the shell is re-validated, and a restart of an
+    /// unstartable shell fails the same way instead of spawning it.
+    private func resetLaunchState() {
+        hasExited = false
+        failureReason = nil
+        failureSuggestion = nil
+    }
+
+    /// The exit codes that mean the exec itself failed — a bad interpreter,
+    /// a corrupt binary, a wrong-architecture build — which the up-front
+    /// validation cannot catch; a 126/127 `processTerminated` within
+    /// `execFailureWindow` is routed to the launch-failure overlay.
+    private static let execFailureExitCodes: Set<Int32> = [126, 127]
+
+    /// How long after launch an `execFailureExitCodes` termination still
+    /// counts as an exec failure (see `processTerminated`): a failed exec
+    /// is reaped near-instantly, while a healthy shell the user
+    /// deliberately leaves via `exit 126`/`exit 127` almost never ends
+    /// this quickly.
     private static let execFailureWindow: TimeInterval = 2
 
     /// Runs the configured shell as a login shell — so the user's PATH
@@ -211,6 +229,13 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// is caught before launch (the other failure causes carry no
     /// suggestion, since they say the terminal, not the shell, is at fault).
     private static let shellSuggestion = "Check that the SHELL environment variable points to an installed shell."
+
+    /// The next step when the shell passed validation but failed at exec:
+    /// the file exists and is executable, so the SHELL path is fine — the
+    /// usual causes are a damaged binary, a wrong-architecture build, or a
+    /// script whose `#!` interpreter is missing, none of which the
+    /// pre-launch checks can see.
+    private static let execFailureSuggestion = "The shell file exists but could not be executed — it may be damaged or built for the wrong architecture. Reinstall it, or point the SHELL environment variable at another shell."
 }
 
 /// Keeps one session per terminal tab for the life of the app.
