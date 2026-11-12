@@ -2,11 +2,13 @@ import Foundation
 import Testing
 @testable import MarkdownViewer
 
-/// Covers the terminal session's launch-failure contract: an unstartable
-/// shell must surface the failure state (not a normal exit), and a restart
-/// must re-validate instead of spawning it. The shell path is injected, so
-/// these tests never spawn a real process.
-@Suite("Terminal session launch failures")
+/// Covers the terminal session contract: an unstartable shell must surface
+/// the failure state (not a normal exit), a restart must re-validate
+/// instead of spawning it, title updates stream through `setTerminalTitle`,
+/// and the manager keeps one session (and one title callback) per tab. The
+/// shell path or session factory is injected, so these tests never spawn a
+/// real process.
+@Suite("Terminal session")
 @MainActor
 struct TerminalSessionTests {
 
@@ -42,7 +44,7 @@ struct TerminalSessionTests {
         #expect(session.failureSuggestion != nil)
     }
 
-    @Test("setTerminalTitle publishes the title and forwards it to the store")
+    @Test("setTerminalTitle publishes the title and forwards it to the onTitleChange callback")
     func setTerminalTitleStreamsToCallback() {
         var received: [String] = []
         let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
@@ -60,5 +62,31 @@ struct TerminalSessionTests {
 
         #expect(session.title == "vim — notes")
         #expect(received == ["vim — notes"])
+    }
+
+    @Test("the manager reuses a tab's session and keeps the first title callback")
+    func managerReusesSessionAndKeepsFirstCallback() {
+        // The factory builds real sessions against a bogus shell path, so
+        // the manager's own reuse logic runs without spawning a process.
+        let manager = TerminalSessionManager(sessionFactory: { terminal, onTitleChange in
+            TerminalSession(terminal: terminal,
+                            onTitleChange: onTitleChange,
+                            shellPath: "/nonexistent/shell-\(UUID().uuidString)")
+        })
+        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
+        var firstTitles: [String] = []
+        var secondTitles: [String] = []
+
+        let first = manager.session(terminal, onTitleChange: { firstTitles.append($0) })
+        let second = manager.session(terminal, onTitleChange: { secondTitles.append($0) })
+
+        // The second call returns the tab's existing session — and drops its
+        // callback — so title updates keep flowing through the closure the
+        // first call stored. The store passes an idempotent per-tab closure
+        // on every call, which is what makes that safe.
+        #expect(first === second)
+        first.setTerminalTitle(source: first.view, title: "vim — notes")
+        #expect(firstTitles == ["vim — notes"])
+        #expect(secondTitles.isEmpty)
     }
 }

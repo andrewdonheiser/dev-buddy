@@ -172,7 +172,20 @@ final class TerminalSessionManager {
 
     static let shared = TerminalSessionManager()
 
+    /// Creates a tab's session. Injectable through the initializer
+    /// (mirroring `DocumentStore`'s seams) so tests can exercise the reuse
+    /// logic with bogus-shell sessions instead of spawning real processes.
+    typealias SessionFactory = @MainActor (TerminalTab, (@MainActor (String) -> Void)?) -> TerminalSession
+
     private var sessions: [TerminalTab.ID: TerminalSession] = [:]
+    private let sessionFactory: SessionFactory
+
+    /// Creates a manager, defaulting to real terminal sessions.
+    init(sessionFactory: @escaping SessionFactory = { terminal, onTitleChange in
+        TerminalSession(terminal: terminal, onTitleChange: onTitleChange)
+    }) {
+        self.sessionFactory = sessionFactory
+    }
 
     /// Returns the tab's session, creating it (and spawning the shell) on
     /// first request. `onTitleChange` receives title updates from the running
@@ -180,7 +193,7 @@ final class TerminalSessionManager {
     func session(_ terminal: TerminalTab,
                  onTitleChange: (@MainActor (String) -> Void)? = nil) -> TerminalSession {
         if let existing = sessions[terminal.id] { return existing }
-        let session = TerminalSession(terminal: terminal, onTitleChange: onTitleChange)
+        let session = sessionFactory(terminal, onTitleChange)
         sessions[terminal.id] = session
         return session
     }

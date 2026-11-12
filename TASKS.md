@@ -22,6 +22,8 @@
 - [x] Tests for `canRefreshSelected` (⌘R gate): terminal-visible and terminal-hidden cases
 - [x] Tests for the title-streaming contract: `DocumentStore.session(_:)` provider routing and
       `TerminalSession.setTerminalTitle(source:title:)`
+- [x] Test for the manager's session reuse and first-callback-wins title streaming
+      (`TerminalSessionManager` gained an injectable session-factory seam)
 - [x] `session` signatures aligned with the unlabeled-id convention
       (`DocumentStore.session(_ id:)`, `TerminalSessionManager.session(_:onTitleChange:)`)
 - [x] `TerminalSession.title` tightened to `private(set)` (assignments flow through
