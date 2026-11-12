@@ -23,11 +23,11 @@ struct TerminalPane: View {
         }
         .onAppear {
             if session == nil {
-                // The store owns the tab list, so it receives the session's
-                // title updates — the session itself stays store-agnostic.
-                session = TerminalSessionManager.shared.session(for: terminal) { title in
-                    store.updateTerminalTitle(terminal.id, title: title)
-                }
+                // Everything terminal flows through the store: it owns the
+                // tab list, receives the session's title updates, and hides
+                // the session manager behind its injected seam — the view
+                // never reaches into a shared singleton itself.
+                session = store.session(for: terminal)
             }
         }
     }
@@ -38,6 +38,10 @@ private struct TerminalPaneContent: View {
     @EnvironmentObject private var store: DocumentStore
     let terminal: TerminalTab
     @ObservedObject var session: TerminalSession
+    /// Lands keyboard focus on the overlay's action button when the shell
+    /// exits or fails to start — the terminal view behind it is dead and
+    /// would silently drop keystrokes.
+    @FocusState private var overlayFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,6 +59,15 @@ private struct TerminalPaneContent: View {
                 }
         }
         .frame(minWidth: 380, idealWidth: 720, minHeight: 300)
+        .onAppear { focusOverlayIfExited() }
+        .onChange(of: session.hasExited) { _, exited in
+            if exited { focusOverlayIfExited() }
+        }
+    }
+
+    /// Focuses the overlay's action button when the overlay is showing.
+    private func focusOverlayIfExited() {
+        if session.hasExited { overlayFocused = true }
     }
 
     private var header: some View {
@@ -107,6 +120,7 @@ private struct TerminalPaneContent: View {
             Button("Restart") {
                 session.restart()
             }
+            .focused($overlayFocused)
         }
         .padding(24)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -139,6 +153,7 @@ private struct TerminalPaneContent: View {
             Button("Try Again") {
                 session.restart()
             }
+            .focused($overlayFocused)
         }
         .padding(24)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))

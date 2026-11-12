@@ -9,7 +9,10 @@ import SwiftTerm
 @MainActor
 final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalViewDelegate {
 
-    let view = LocalProcessTerminalView(frame: .zero)
+    /// The terminal view this session hosts, exposed read-only for
+    /// `TerminalHostingView` — the SwiftUI bridge that mounts it in the
+    /// pane; everything else reaches the terminal through the session.
+    private(set) var view: LocalProcessTerminalView
 
     /// The title the running program reports, or the working directory name
     /// until it does.
@@ -26,11 +29,19 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// Receives title updates from the running program, wired by whoever
     /// creates the session — the session never reaches into a store itself.
     private let onTitleChange: (@MainActor (String) -> Void)?
+    /// The shell executable to run. Injectable so tests can exercise the
+    /// launch-failure path without mutating the process environment;
+    /// `nil` runs the user's default shell from the SHELL variable.
+    private let shellPath: String
 
-    init(terminal: TerminalTab, onTitleChange: (@MainActor (String) -> Void)? = nil) {
+    init(terminal: TerminalTab,
+         onTitleChange: (@MainActor (String) -> Void)? = nil,
+         shellPath: String? = nil) {
         self.workingDirectory = terminal.workingDirectory
         self.title = terminal.title
         self.onTitleChange = onTitleChange
+        self.shellPath = shellPath ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        self.view = LocalProcessTerminalView(frame: .zero)
         super.init()
 
         view.processDelegate = self
@@ -38,18 +49,24 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         startProcess()
     }
 
-    /// Starts (or restarts) the user's login shell.
+    /// Starts (or restarts) the session's shell.
     private func startProcess() {
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
         environment["TERM_PROGRAM"] = "MarkdownViewer"
         let env = environment.map { "\($0.key)=\($0.value)" }.sorted()
-        let shell = Self.launchConfiguration()
+        let shell = Self.launchConfiguration(for: shellPath)
         // SwiftTerm reports a failed exec — e.g. a missing shell — as an
         // ordinary termination with exit code 127, not as a launch failure,
         // so the executable is validated up front: an unstartable shell must
-        // reach the launch-failure overlay, not the normal-exit one.
-        guard FileManager.default.isExecutableFile(atPath: shell.path) else {
+        // reach the launch-failure overlay, not the normal-exit one. The
+        // POSIX x bit only means search permission on a directory, so a
+        // directory path is rejected here too — it would otherwise fail at
+        // exec with the same conflation.
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: shell.path, isDirectory: &isDirectory)
+        guard exists, !isDirectory.boolValue,
+              FileManager.default.isExecutableFile(atPath: shell.path) else {
             hasExited = true
             failureReason = "The shell at \(shell.path) could not be found or run."
             failureSuggestion = Self.shellSuggestion
@@ -63,20 +80,15 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
                           currentDirectory: workingDirectory.path)
     }
 
+    /// Restarts the shell after it exited or failed to start, clearing any
+    /// launch-failure state first — the shell is re-validated, so a restart
+    /// of an unstartable shell fails the same way instead of spawning it.
     func restart() {
         guard hasExited else { return }
         hasExited = false
         failureReason = nil
         failureSuggestion = nil
         startProcess()
-    }
-
-    /// Runs the user's default shell as a login shell — so the user's PATH
-    /// (Homebrew, etc.) is available to a GUI app — inside the tab's working
-    /// directory.
-    private static func launchConfiguration() -> (path: String, arguments: [String]) {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        return (shell, ["-l"])
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
@@ -105,13 +117,30 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     // MARK: - Accessibility
 
     /// Announces the session's end to assistive technology, which otherwise
-    /// has no signal that the terminal view changed state.
+    /// has no signal that the terminal view changed state. A launch failure
+    /// includes its reason and next step so screen-reader users learn why
+    /// the terminal ended without navigating the overlay.
     private func announceEnd(failed: Bool) {
-        let message = failed ? "Terminal failed to start" : "Terminal session ended"
+        var message = failed ? "Terminal failed to start" : "Terminal session ended"
+        if failed, let failureReason {
+            message += ". \(failureReason)"
+            if let failureSuggestion {
+                message += " \(failureSuggestion)"
+            }
+        }
         // Post from the terminal view itself: a nil element may not be
         // delivered to assistive technology.
         NSAccessibility.post(element: view, notification: .announcement,
                              userInfo: [.announcement: message])
+    }
+
+    // MARK: - Helpers
+
+    /// Runs the configured shell as a login shell — so the user's PATH
+    /// (Homebrew, etc.) is available to a GUI app — inside the tab's working
+    /// directory.
+    private static func launchConfiguration(for shellPath: String) -> (path: String, arguments: [String]) {
+        (shellPath, ["-l"])
     }
 
     /// A plain-language rendering of a launch failure.
@@ -162,6 +191,8 @@ final class TerminalSessionManager {
         return !session.hasExited
     }
 
+    /// Forgets the tab's session, terminating its shell (and the programs it
+    /// runs) if one is still alive.
     func removeSession(_ terminalID: TerminalTab.ID) {
         sessions[terminalID]?.view.terminate()
         sessions[terminalID] = nil

@@ -42,11 +42,11 @@ struct MainView: View {
                    get: { store.pendingCloseTerminalID != nil },
                    set: { if !$0 { store.cancelCloseTerminal() } }
                ),
-               presenting: store.pendingCloseTerminalID) { _ in
+               presenting: store.pendingCloseTerminal) { _ in
             Button("Close Terminal", role: .destructive) { store.confirmCloseTerminal() }
             Button("Cancel", role: .cancel) { store.cancelCloseTerminal() }
-        } message: { _ in
-            Text("The shell and its running programs will be terminated.")
+        } message: { terminal in
+            Text("\"\(terminal.title)\" — \(terminal.workingDirectory.path). The shell and its running programs will be terminated.")
         }
     }
 

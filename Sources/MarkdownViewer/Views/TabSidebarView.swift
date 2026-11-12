@@ -247,7 +247,9 @@ struct TabSidebarView: View {
                     Label("New Terminal", systemImage: "terminal")
                 }
                 .buttonStyle(.plain)
-                .help("Open a terminal tab")
+                .help(store.selectedDocument != nil
+                      ? "Open a terminal tab in the selected file's folder"
+                      : "Open a terminal tab in your home folder")
             }
             HStack(spacing: 8) {
                 Button {

@@ -285,6 +285,69 @@ struct TerminalTabTests {
         #expect(store.canCloseSelected == false)
     }
 
+    @Test("selecting an unknown document id is ignored")
+    func selectingUnknownDocumentIsIgnored() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let document = try #require(store.selectedDocument)
+        let terminal = store.openTerminalTab()
+        #expect(store.selectedTerminal?.id == terminal.id)
+
+        // An id that is not an open document changes nothing — most
+        // importantly, it must not clear the visible terminal, matching
+        // `selectTerminal(_: )`'s guard on unknown ids.
+        store.selectDocument(UUID())
+
+        #expect(store.selectedDocument?.id == document.id)
+        #expect(store.selectedTerminal?.id == terminal.id)
+    }
+
+    @Test("closing every document falls back to an open terminal")
+    func closeAllDocumentsFallsBackToTerminal() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let document = try #require(store.selectedDocument)
+        let terminal = store.openTerminalTab()
+        store.selectDocument(document.id)
+        #expect(store.selectedTerminal == nil)
+
+        store.closeAllDocuments()
+
+        #expect(store.documents.isEmpty)
+        #expect(store.selectedDocument == nil)
+        #expect(store.selectedTerminal?.id == terminal.id)
+    }
+
+    @Test("opening a saved view whose files are gone falls back to the open terminal")
+    func savedViewWithMissingFilesFallsBackToTerminal() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let terminal = store.openTerminalTab()
+
+        // The saved view points at files that no longer exist, so no
+        // document is restored and the terminal keeps the detail column
+        // instead of the empty state.
+        let view = SavedView(name: "Gone", paths: [url.path], selectedPath: url.path)
+        try FileManager.default.removeItem(at: url)
+        store.open(view)
+
+        #expect(store.documents.isEmpty)
+        #expect(store.selectedDocument == nil)
+        #expect(store.selectedTerminal?.id == terminal.id)
+    }
+
     @Test("opening a saved view keeps terminal tabs and their shells running")
     func openingSavedViewKeepsTerminals() throws {
         let store = makeStore()

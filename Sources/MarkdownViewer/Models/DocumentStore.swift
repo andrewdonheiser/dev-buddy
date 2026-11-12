@@ -24,21 +24,30 @@ final class DocumentStore: ObservableObject {
     /// detail column (matching `MainView` and `currentTabIndex`), while the
     /// document selection survives so the chat panel keeps its context and
     /// `openTerminalTab` still knows the document's folder. Tab order is
-    /// documents first, then terminals in open order.
-    @Published var selectedTerminalID: TerminalTab.ID?
+    /// documents first, then terminals in open order. Settable only inside
+    /// the store, like `selectedID`, so the precedence rule cannot be
+    /// bypassed by a direct assignment from outside.
+    @Published private(set) var selectedTerminalID: TerminalTab.ID?
     /// Terminal tabs, in open order.
     @Published private(set) var terminals: [TerminalTab] = []
     /// The terminal tab whose close is awaiting confirmation, if any.
     @Published private(set) var pendingCloseTerminalID: TerminalTab.ID?
 
-    /// Whether a terminal tab's shell is still running, and the teardown for
-    /// a tab's terminal session. Both default to the shared session manager
-    /// and are injected through the initializer (mirroring `ChatStore`'s
-    /// injected `stream` closure), so every manager access from the store
-    /// flows through one seam and tests can exercise the close-confirmation
-    /// flow without spawning real processes.
-    private let hasLiveTerminalProcess: @MainActor (TerminalTab.ID) -> Bool
-    private let removeTerminalSession: @MainActor (TerminalTab.ID) -> Void
+    /// Whether a terminal tab's shell is still running, the teardown for a
+    /// tab's terminal session, and the creation of a tab's session. All
+    /// three default to the shared session manager and are injected through
+    /// the initializer (mirroring `ChatStore`'s injected `stream` closure,
+    /// named through a typealias the same way `ChatStore.Streamer` is), so
+    /// every manager access from the store flows through one seam and tests
+    /// can exercise the close-confirmation flow without spawning real
+    /// processes.
+    typealias LivenessProbe = @MainActor (TerminalTab.ID) -> Bool
+    typealias SessionRemover = @MainActor (TerminalTab.ID) -> Void
+    typealias SessionProvider = @MainActor (TerminalTab, (@MainActor (String) -> Void)?) -> TerminalSession
+
+    private let hasLiveTerminalProcess: LivenessProbe
+    private let removeTerminalSession: SessionRemover
+    private let terminalSessionProvider: SessionProvider
 
     /// The registry that records the files this store opens. Injected
     /// (defaulting to the shared store, like the terminal seams above) so
@@ -54,11 +63,13 @@ final class DocumentStore: ObservableObject {
     /// Internal (not private) so tests can build isolated stores instead of
     /// sharing the singleton, mirroring the other stores' injectable
     /// initializers.
-    init(hasLiveTerminalProcess: @escaping @MainActor (TerminalTab.ID) -> Bool = { TerminalSessionManager.shared.hasLiveProcess($0) },
-         removeTerminalSession: @escaping @MainActor (TerminalTab.ID) -> Void = { TerminalSessionManager.shared.removeSession($0) },
+    init(hasLiveTerminalProcess: @escaping LivenessProbe = { TerminalSessionManager.shared.hasLiveProcess($0) },
+         removeTerminalSession: @escaping SessionRemover = { TerminalSessionManager.shared.removeSession($0) },
+         terminalSessionProvider: @escaping SessionProvider = { TerminalSessionManager.shared.session(for: $0, onTitleChange: $1) },
          labels: LabelStore = .shared) {
         self.hasLiveTerminalProcess = hasLiveTerminalProcess
         self.removeTerminalSession = removeTerminalSession
+        self.terminalSessionProvider = terminalSessionProvider
         self.labels = labels
         // Re-render every document when the reading width or text size changes.
         options.$contentWidth
@@ -89,13 +100,33 @@ final class DocumentStore: ObservableObject {
     /// detail column to Markdown. The single place the "selecting a document
     /// leaves the terminal pane" rule lives; a direct assignment inside the
     /// store (e.g. while re-selecting a neighbor after a close) keeps the
-    /// terminal selection untouched.
+    /// terminal selection untouched. Unknown ids are ignored, mirroring
+    /// `selectTerminal(_:)`, so the selection can never point at a tab that
+    /// is not open.
     func selectDocument(_ id: OpenDocument.ID) {
+        guard documents.contains(where: { $0.id == id }) else { return }
         selectedID = id
         selectedTerminalID = nil
     }
 
     // MARK: - Terminal tabs
+
+    /// The terminal tab whose close is awaiting confirmation, if any.
+    var pendingCloseTerminal: TerminalTab? {
+        guard let pendingCloseTerminalID else { return nil }
+        return terminals.first { $0.id == pendingCloseTerminalID }
+    }
+
+    /// The tab's terminal session, creating it (and spawning the shell) on
+    /// first request. Routed through the store — behind the injected
+    /// session seam — so views never reach into the session manager
+    /// directly, and the session's title updates stream back into the tab
+    /// list through `updateTerminalTitle(_:title:)`.
+    func session(for terminal: TerminalTab) -> TerminalSession {
+        terminalSessionProvider(terminal) { [weak self] title in
+            self?.updateTerminalTitle(terminal.id, title: title)
+        }
+    }
 
     /// Selects a terminal tab to show in the terminal pane.
     func selectTerminal(_ id: TerminalTab.ID) {
@@ -277,13 +308,25 @@ final class DocumentStore: ObservableObject {
         selectedID != nil || selectedTerminalID != nil
     }
 
+    /// Whether ⌘R has anything to reload right now: it acts on the visible
+    /// tab, and a selected terminal takes the detail column while hiding the
+    /// document it would reload.
+    var canRefreshSelected: Bool {
+        selectedTerminalID == nil && selectedID != nil
+    }
+
     /// Closes every open document, keeping terminal tabs (and their running
-    /// shells) open.
+    /// shells) open. With no document left to show, the detail column falls
+    /// back to an open terminal — the same rule `close(_:)` applies when the
+    /// last document goes away.
     func closeAllDocuments() {
         for watcher in watchers.values { watcher.stop() }
         watchers = [:]
         documents = []
         selectedID = nil
+        if selectedTerminalID == nil {
+            selectedTerminalID = terminals.first?.id
+        }
     }
 
     /// Closes every open document and terminal.
