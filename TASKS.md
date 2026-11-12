@@ -96,4 +96,20 @@
 - [ ] Keychain reads off the main thread (a locked keychain can block the UI)
 - [ ] Stop a document's stream when its tab closes; trim very long histories
 
+# Terminal exec-failure overlay
 
+- [x] Route exit codes 126/127 from `processTerminated` to the launch-failure
+      overlay (reason + suggestion) instead of the benign "session ended",
+      covering shells that pass pre-launch validation but fail at exec
+- [x] Tests: an executable script with a missing `#!` interpreter (passes
+      validation, fails at exec) reaches the failure state; a shell that
+      starts and exits nonzero stays on the normal-exit path; the 126 branch
+      is pinned by driving the termination callback directly
+- [x] Only classify 126/127 as an exec failure within a short window after
+      launch, so a healthy shell the user deliberately leaves via
+      `exit 126`/`exit 127` keeps the normal-exit path (clock injectable for
+      the tests, which pin both sides of the window)
+
+## Verify
+- [ ] `swift build` (not runnable in this sandbox: no macOS toolchain)
+- [ ] `swift test` (not runnable in this sandbox: no macOS toolchain)
