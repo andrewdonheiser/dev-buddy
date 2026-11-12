@@ -12,14 +12,10 @@ final class DocumentStore: ObservableObject {
     static let shared = DocumentStore()
 
     @Published private(set) var documents: [OpenDocument] = []
-    /// The document selected for reading and for the chat panel. Setting it
-    /// clears `selectedTerminalID` — selecting a document always returns the
-    /// detail column to Markdown.
-    @Published var selectedID: OpenDocument.ID? {
-        didSet {
-            selectedTerminalID = nil
-        }
-    }
+    /// The document selected for reading and for the chat panel. Selecting a
+    /// document through `selectDocument(_:)` clears `selectedTerminalID` —
+    /// selecting a document always returns the detail column to Markdown.
+    @Published var selectedID: OpenDocument.ID?
     /// The terminal tab shown in the embedded terminal, if any. Selection is
     /// a store-level contract with a terminal-over-document precedence: when
     /// both a document and a terminal are selected, the terminal takes the
@@ -32,6 +28,12 @@ final class DocumentStore: ObservableObject {
     @Published private(set) var terminals: [TerminalTab] = []
     /// The terminal tab whose close is awaiting confirmation, if any.
     @Published private(set) var pendingCloseTerminalID: TerminalTab.ID?
+
+    /// Whether a terminal tab's shell is still running. Injectable so tests
+    /// can exercise the close-confirmation flow without spawning real
+    /// processes.
+    var hasLiveTerminalProcess: @MainActor (TerminalTab.ID) -> Bool =
+        { TerminalSessionManager.shared.hasLiveProcess($0) }
 
     private var watchers: [OpenDocument.ID: FileWatcher] = [:]
     private let renderer = HTMLRenderer()
@@ -67,6 +69,16 @@ final class DocumentStore: ObservableObject {
         return terminals.first { $0.id == selectedTerminalID }
     }
 
+    /// Selects a document for reading and the chat panel, returning the
+    /// detail column to Markdown. The single place the "selecting a document
+    /// leaves the terminal pane" rule lives; assigning `selectedID` directly
+    /// (e.g. while re-selecting a neighbor after a close) keeps the terminal
+    /// selection untouched.
+    func selectDocument(_ id: OpenDocument.ID) {
+        selectedID = id
+        selectedTerminalID = nil
+    }
+
     // MARK: - Terminal tabs
 
     /// Selects a terminal tab to show in the terminal pane.
@@ -97,7 +109,7 @@ final class DocumentStore: ObservableObject {
     func closeTerminal(_ id: TerminalTab.ID) {
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
         terminals.remove(at: index)
-        TerminalSessionManager.shared.removeSession(terminalID: id)
+        TerminalSessionManager.shared.removeSession(id)
         if pendingCloseTerminalID == id { pendingCloseTerminalID = nil }
         guard selectedTerminalID == id else { return }
         selectedTerminalID = nil
@@ -113,7 +125,7 @@ final class DocumentStore: ObservableObject {
     /// without one (never opened, or already exited) closes immediately.
     func requestCloseTerminal(_ id: TerminalTab.ID) {
         guard terminals.contains(where: { $0.id == id }) else { return }
-        guard TerminalSessionManager.shared.hasLiveProcess(terminalID: id) else {
+        guard hasLiveTerminalProcess(id) else {
             closeTerminal(id)
             return
         }
@@ -166,14 +178,14 @@ final class DocumentStore: ObservableObject {
             }
 
             if let existing = documents.first(where: { $0.url == standardized }) {
-                selectedID = existing.id
+                selectDocument(existing.id)
                 reload(existing.id)
                 labels.register(path: standardized.path)
                 continue
             }
             guard let document = makeDocument(for: standardized) else { continue }
             documents.append(document)
-            selectedID = document.id
+            selectDocument(document.id)
             startWatching(document)
             labels.register(path: standardized.path)
         }
@@ -223,11 +235,10 @@ final class DocumentStore: ObservableObject {
                 selectedTerminalID = terminals.first?.id
             } else {
                 let nextIndex = min(index, documents.count - 1)
-                // Keep the visible terminal on screen: re-selecting the
-                // neighbor document must not dismiss the terminal pane.
-                let visibleTerminalID = selectedTerminalID
+                // Re-selecting the neighbor document must not dismiss the
+                // terminal pane: selection only clears through
+                // `selectDocument(_:)`.
                 selectedID = documents[nextIndex].id
-                selectedTerminalID = visibleTerminalID
             }
         }
     }
@@ -248,16 +259,22 @@ final class DocumentStore: ObservableObject {
         selectedID != nil || selectedTerminalID != nil
     }
 
-    /// Closes every open document and terminal.
-    func closeAll() {
+    /// Closes every open document, keeping terminal tabs (and their running
+    /// shells) open.
+    func closeAllDocuments() {
         for watcher in watchers.values { watcher.stop() }
         watchers = [:]
         documents = []
+        selectedID = nil
+    }
+
+    /// Closes every open document and terminal.
+    func closeAll() {
+        closeAllDocuments()
         for terminal in terminals {
-            TerminalSessionManager.shared.removeSession(terminalID: terminal.id)
+            TerminalSessionManager.shared.removeSession(terminal.id)
         }
         terminals = []
-        selectedID = nil
         selectedTerminalID = nil
         pendingCloseTerminalID = nil
     }
@@ -274,14 +291,17 @@ final class DocumentStore: ObservableObject {
         )
     }
 
-    /// Replaces the tab list with the files stored in a saved view. Files that
-    /// no longer exist on disk are skipped.
+    /// Replaces the document tab list with the files stored in a saved view.
+    /// Files that no longer exist on disk are skipped. Terminal tabs stay
+    /// open: saved views restore documents only, and closing them here would
+    /// terminate their shells without the confirmation every other close path
+    /// uses.
     func open(_ view: SavedView) {
-        closeAll()
+        closeAllDocuments()
         open(urls: view.paths.map { URL(fileURLWithPath: $0) })
         if let selectedPath = view.selectedPath,
            let match = documents.first(where: { $0.url.path == selectedPath }) {
-            selectedID = match.id
+            selectDocument(match.id)
         }
     }
 
@@ -303,7 +323,7 @@ final class DocumentStore: ObservableObject {
     private func selectTab(at index: Int) {
         guard index >= 0, index < documents.count + terminals.count else { return }
         if index < documents.count {
-            selectedID = documents[index].id
+            selectDocument(documents[index].id)
         } else {
             selectedTerminalID = terminals[index - documents.count].id
         }
@@ -404,7 +424,7 @@ final class DocumentStore: ObservableObject {
         open(urls: paths.map { URL(fileURLWithPath: $0) })
         if let selectedPath = defaults.string(forKey: SessionKeys.selectedPath),
            let match = documents.first(where: { $0.url.path == selectedPath }) {
-            selectedID = match.id
+            selectDocument(match.id)
         }
     }
 

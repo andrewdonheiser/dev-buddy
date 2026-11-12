@@ -283,7 +283,7 @@ struct TabSidebarView: View {
                    let terminalID = UUID(uuidString: String(id.dropFirst(SidebarItem.terminalIDPrefix.count))) {
                     store.select(terminalID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
-                    store.selectedID = document.id
+                    store.selectDocument(document.id)
                 } else {
                     store.open(url: URL(fileURLWithPath: id))
                 }
@@ -387,9 +387,19 @@ private struct SidebarRow: View {
             }
             .buttonStyle(.plain)
             .help("Close terminal tab (terminates the shell and its running programs)")
-            .accessibilityLabel("Close terminal \(terminal.title)")
+            .accessibilityLabel(closeLabel(for: terminal))
         }
         .padding(.vertical, 2)
+    }
+
+    /// Close buttons need names unique per terminal: titles are not unique
+    /// (the default is the working directory's last path component), so the
+    /// label carries the tab's ordinal among the open terminals.
+    private func closeLabel(for terminal: TerminalTab) -> String {
+        guard let index = store.terminals.firstIndex(where: { $0.id == terminal.id }) else {
+            return "Close terminal \(terminal.title)"
+        }
+        return "Close terminal \(index + 1) of \(store.terminals.count): \(terminal.title)"
     }
 
     /// The document tab and search result row.
@@ -485,7 +495,7 @@ private struct SidebarContextMenu: View {
 
     private func open() {
         if let document = item.document {
-            store.selectedID = document.id
+            store.selectDocument(document.id)
         } else if let terminal = item.terminal {
             store.select(terminal.id)
         } else {

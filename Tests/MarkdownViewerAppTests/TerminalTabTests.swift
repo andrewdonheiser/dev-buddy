@@ -137,7 +137,7 @@ struct TerminalTabTests {
         store.openTerminalTab()
         #expect(store.selectedTerminal != nil)
 
-        store.selectedID = document.id
+        store.selectDocument(document.id)
 
         #expect(store.selectedTerminal == nil)
         #expect(store.selectedDocument?.id == document.id)
@@ -206,6 +206,45 @@ struct TerminalTabTests {
         #expect(store.selectedTerminal == nil)
     }
 
+    @Test("closing a terminal with a live process asks for confirmation")
+    func closeWithLiveProcessAsksForConfirmation() {
+        let store = makeStore()
+        defer { store.closeAll() }
+
+        // Pretend the shell is running so no real process is spawned.
+        store.hasLiveTerminalProcess = { _ in true }
+        let terminal = store.openTerminalTab()
+
+        store.requestCloseTerminal(terminal.id)
+
+        // The close waits for confirmation instead of killing the shell.
+        #expect(store.pendingCloseTerminalID == terminal.id)
+        #expect(store.terminals.map(\.id) == [terminal.id])
+        #expect(store.selectedTerminal?.id == terminal.id)
+
+        store.confirmCloseTerminal()
+
+        #expect(store.pendingCloseTerminalID == nil)
+        #expect(store.terminals.isEmpty)
+        #expect(store.selectedTerminal == nil)
+    }
+
+    @Test("canceling the close confirmation keeps the terminal open")
+    func cancelCloseConfirmationKeepsTerminal() {
+        let store = makeStore()
+        defer { store.closeAll() }
+
+        store.hasLiveTerminalProcess = { _ in true }
+        let terminal = store.openTerminalTab()
+
+        store.requestCloseTerminal(terminal.id)
+        store.cancelCloseTerminal()
+
+        #expect(store.pendingCloseTerminalID == nil)
+        #expect(store.terminals.map(\.id) == [terminal.id])
+        #expect(store.selectedTerminal?.id == terminal.id)
+    }
+
     @Test("close all clears terminals alongside documents")
     func closeAllClearsTerminals() {
         let store = makeStore()
@@ -219,5 +258,26 @@ struct TerminalTabTests {
         #expect(store.terminals.isEmpty)
         #expect(store.selectedTerminal == nil)
         #expect(store.canCloseSelected == false)
+    }
+
+    @Test("opening a saved view keeps terminal tabs and their shells running")
+    func openingSavedViewKeepsTerminals() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let terminal = store.openTerminalTab()
+        let view = SavedView(name: "Test", paths: [url.path], selectedPath: url.path)
+
+        store.open(view)
+
+        // The view replaces the document list without terminating the
+        // terminal's shell — closing a live shell always asks first.
+        #expect(store.documents.count == 1)
+        #expect(store.terminals.map(\.id) == [terminal.id])
+        #expect(store.selectedDocument?.url.path == url.path)
+        #expect(store.selectedTerminal == nil)
     }
 }

@@ -5,6 +5,7 @@ import SwiftUI
 /// The embedded terminal shown in the detail column when a terminal tab is
 /// selected: a small header above the terminal view.
 struct TerminalPane: View {
+    @EnvironmentObject private var store: DocumentStore
     let terminal: TerminalTab
 
     /// Resolved on first appear. Creating a session spawns the shell
@@ -22,7 +23,11 @@ struct TerminalPane: View {
         }
         .onAppear {
             if session == nil {
-                session = TerminalSessionManager.shared.session(for: terminal)
+                // The store owns the tab list, so it receives the session's
+                // title updates — the session itself stays store-agnostic.
+                session = TerminalSessionManager.shared.session(for: terminal) { title in
+                    store.updateTerminalTitle(terminal.id, title: title)
+                }
             }
         }
     }
@@ -123,10 +128,14 @@ private struct TerminalPaneContent: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Text("Check that the SHELL environment variable points to an installed shell.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            // Only the launch failures that can have a next step show one,
+            // so the hint never contradicts the stated reason.
+            if let suggestion = session.failureSuggestion {
+                Text(suggestion)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             Button("Try Again") {
                 session.restart()
             }

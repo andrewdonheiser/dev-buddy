@@ -19,13 +19,20 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// A plain-language reason the shell failed to launch, set only when the
     /// process failed to start (as opposed to exiting normally).
     @Published private(set) var failureReason: String?
+    /// A next step for the launch failures that have one, shown alongside the
+    /// reason instead of a hint that may not apply.
+    @Published private(set) var failureSuggestion: String?
 
     private let workingDirectory: URL
+    /// Receives title updates from the running program, wired by whoever
+    /// creates the session — the session never reaches into a store itself.
+    private let onTitleChange: (@MainActor (String) -> Void)?
 
-    init(terminal: TerminalTab) {
+    init(terminal: TerminalTab, onTitleChange: (@MainActor (String) -> Void)? = nil) {
         self.terminalID = terminal.id
         self.workingDirectory = terminal.workingDirectory
         self.title = terminal.title
+        self.onTitleChange = onTitleChange
         super.init()
 
         view.processDelegate = self
@@ -51,6 +58,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         guard hasExited else { return }
         hasExited = false
         failureReason = nil
+        failureSuggestion = nil
         startProcess()
     }
 
@@ -67,7 +75,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         guard !title.isEmpty else { return }
         self.title = title
-        DocumentStore.shared.updateTerminalTitle(terminalID, title: title)
+        onTitleChange?(title)
     }
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
@@ -78,6 +86,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     func processFailedToStart(source: TerminalView, error: LocalProcessError) {
         hasExited = true
         failureReason = Self.describe(error)
+        failureSuggestion = Self.suggestion(for: error)
         announceEnd(failed: true)
     }
 
@@ -91,7 +100,9 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// has no signal that the terminal view changed state.
     private func announceEnd(failed: Bool) {
         let message = failed ? "Terminal failed to start" : "Terminal session ended"
-        NSAccessibility.post(element: nil, notification: .announcement,
+        // Post from the terminal view itself: a nil element may not be
+        // delivered to assistive technology.
+        NSAccessibility.post(element: view, notification: .announcement,
                              userInfo: [.announcement: message])
     }
 
@@ -110,6 +121,19 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             "The terminal could not write to the shell process."
         }
     }
+
+    /// A next step for the launch failures that can have one. Spawning fails
+    /// this way when the executable is missing or invalid, and the shell path
+    /// comes from the SHELL environment variable — the other causes say the
+    /// terminal, not the shell, is the problem.
+    private static func suggestion(for error: LocalProcessError) -> String? {
+        switch error {
+        case .forkFailed:
+            "Check that the SHELL environment variable points to an installed shell."
+        case .alreadyRunning, .notRunning, .writeChannelFailed, .writeFailed:
+            nil
+        }
+    }
 }
 
 /// Keeps one session per terminal tab for the life of the app.
@@ -120,20 +144,24 @@ final class TerminalSessionManager {
 
     private var sessions: [TerminalTab.ID: TerminalSession] = [:]
 
-    func session(for terminal: TerminalTab) -> TerminalSession {
+    /// Returns the tab's session, creating it (and spawning the shell) on
+    /// first request. `onTitleChange` receives title updates from the running
+    /// program and is only stored when a session is created.
+    func session(for terminal: TerminalTab,
+                 onTitleChange: (@MainActor (String) -> Void)? = nil) -> TerminalSession {
         if let existing = sessions[terminal.id] { return existing }
-        let session = TerminalSession(terminal: terminal)
+        let session = TerminalSession(terminal: terminal, onTitleChange: onTitleChange)
         sessions[terminal.id] = session
         return session
     }
 
     /// Whether the tab's shell is still running. Does not create a session.
-    func hasLiveProcess(terminalID: TerminalTab.ID) -> Bool {
+    func hasLiveProcess(_ terminalID: TerminalTab.ID) -> Bool {
         guard let session = sessions[terminalID] else { return false }
         return !session.hasExited
     }
 
-    func removeSession(terminalID: TerminalTab.ID) {
+    func removeSession(_ terminalID: TerminalTab.ID) {
         sessions[terminalID]?.view.terminate()
         sessions[terminalID] = nil
     }
