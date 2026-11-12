@@ -17,6 +17,23 @@
 - [ ] `swift test`
 - [ ] App launches; ⌘T opens a shell in a tab, typing and closing work
 
+# Terminal Tabs Review Follow-ups (issue #7)
+
+- [x] Tests for `canRefreshSelected` (⌘R gate): terminal-visible and terminal-hidden cases
+- [x] Tests for the title-streaming contract: `DocumentStore.session(_:)` provider routing and
+      `TerminalSession.setTerminalTitle(source:title:)`
+- [x] `session` signatures aligned with the unlabeled-id convention
+      (`DocumentStore.session(_ id:)`, `TerminalSessionManager.session(_:onTitleChange:)`)
+- [x] `TerminalSession.title` tightened to `private(set)` (assignments flow through
+      `setTerminalTitle`)
+- [x] Verbose terminal-tab doc comments trimmed to one or two sentences, keeping the invariant
+      each records
+- [x] Sidebar search placeholder covers terminals ("Search files, labels, or terminals")
+
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — see PR)
+
 # View Options
 
 ## Kit

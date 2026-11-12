@@ -41,4 +41,24 @@ struct TerminalSessionTests {
         #expect(session.failureReason != nil)
         #expect(session.failureSuggestion != nil)
     }
+
+    @Test("setTerminalTitle publishes the title and forwards it to the store")
+    func setTerminalTitleStreamsToCallback() {
+        var received: [String] = []
+        let terminal = TerminalTab(workingDirectory: FileManager.default.temporaryDirectory)
+        let session = TerminalSession(terminal: terminal,
+                                      onTitleChange: { received.append($0) },
+                                      shellPath: "/nonexistent/shell-\(UUID().uuidString)")
+
+        session.setTerminalTitle(source: session.view, title: "vim — notes")
+
+        #expect(session.title == "vim — notes")
+        #expect(received == ["vim — notes"])
+
+        // Empty titles are ignored, matching the tab-list update rule.
+        session.setTerminalTitle(source: session.view, title: "")
+
+        #expect(session.title == "vim — notes")
+        #expect(received == ["vim — notes"])
+    }
 }

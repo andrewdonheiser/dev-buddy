@@ -151,7 +151,7 @@ struct TabSidebarView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search files or labels", text: $query)
+            TextField("Search files, labels, or terminals", text: $query)
                 .textFieldStyle(.plain)
             if !query.isEmpty {
                 Button {
