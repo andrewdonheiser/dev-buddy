@@ -15,7 +15,9 @@ final class DocumentStore: ObservableObject {
     /// The document selected for reading and for the chat panel. Selecting a
     /// document through `selectDocument(_:)` clears `selectedTerminalID` —
     /// selecting a document always returns the detail column to Markdown.
-    @Published var selectedID: OpenDocument.ID?
+    /// Settable only inside the store, so the rule cannot be bypassed by a
+    /// direct assignment from outside.
+    @Published private(set) var selectedID: OpenDocument.ID?
     /// The terminal tab shown in the embedded terminal, if any. Selection is
     /// a store-level contract with a terminal-over-document precedence: when
     /// both a document and a terminal are selected, the terminal takes the
@@ -29,11 +31,14 @@ final class DocumentStore: ObservableObject {
     /// The terminal tab whose close is awaiting confirmation, if any.
     @Published private(set) var pendingCloseTerminalID: TerminalTab.ID?
 
-    /// Whether a terminal tab's shell is still running. Injectable so tests
-    /// can exercise the close-confirmation flow without spawning real
-    /// processes.
-    var hasLiveTerminalProcess: @MainActor (TerminalTab.ID) -> Bool =
-        { TerminalSessionManager.shared.hasLiveProcess($0) }
+    /// Whether a terminal tab's shell is still running, and the teardown for
+    /// a tab's terminal session. Both default to the shared session manager
+    /// and are injected through the initializer (mirroring `ChatStore`'s
+    /// injected `stream` closure), so every manager access from the store
+    /// flows through one seam and tests can exercise the close-confirmation
+    /// flow without spawning real processes.
+    private let hasLiveTerminalProcess: @MainActor (TerminalTab.ID) -> Bool
+    private let removeTerminalSession: @MainActor (TerminalTab.ID) -> Void
 
     private var watchers: [OpenDocument.ID: FileWatcher] = [:]
     private let renderer = HTMLRenderer()
@@ -43,7 +48,10 @@ final class DocumentStore: ObservableObject {
     /// Internal (not private) so tests can build isolated stores instead of
     /// sharing the singleton, mirroring the other stores' injectable
     /// initializers.
-    init() {
+    init(hasLiveTerminalProcess: @escaping @MainActor (TerminalTab.ID) -> Bool = { TerminalSessionManager.shared.hasLiveProcess($0) },
+         removeTerminalSession: @escaping @MainActor (TerminalTab.ID) -> Void = { TerminalSessionManager.shared.removeSession($0) }) {
+        self.hasLiveTerminalProcess = hasLiveTerminalProcess
+        self.removeTerminalSession = removeTerminalSession
         // Re-render every document when the reading width or text size changes.
         options.$contentWidth
             .combineLatest(options.$fontSize)
@@ -71,9 +79,9 @@ final class DocumentStore: ObservableObject {
 
     /// Selects a document for reading and the chat panel, returning the
     /// detail column to Markdown. The single place the "selecting a document
-    /// leaves the terminal pane" rule lives; assigning `selectedID` directly
-    /// (e.g. while re-selecting a neighbor after a close) keeps the terminal
-    /// selection untouched.
+    /// leaves the terminal pane" rule lives; a direct assignment inside the
+    /// store (e.g. while re-selecting a neighbor after a close) keeps the
+    /// terminal selection untouched.
     func selectDocument(_ id: OpenDocument.ID) {
         selectedID = id
         selectedTerminalID = nil
@@ -82,9 +90,9 @@ final class DocumentStore: ObservableObject {
     // MARK: - Terminal tabs
 
     /// Selects a terminal tab to show in the terminal pane.
-    func select(_ terminalID: TerminalTab.ID) {
-        guard terminals.contains(where: { $0.id == terminalID }) else { return }
-        selectedTerminalID = terminalID
+    func selectTerminal(_ id: TerminalTab.ID) {
+        guard terminals.contains(where: { $0.id == id }) else { return }
+        selectedTerminalID = id
     }
 
     /// Opens a terminal tab running the user's login shell in `directory`.
@@ -109,7 +117,7 @@ final class DocumentStore: ObservableObject {
     func closeTerminal(_ id: TerminalTab.ID) {
         guard let index = terminals.firstIndex(where: { $0.id == id }) else { return }
         terminals.remove(at: index)
-        TerminalSessionManager.shared.removeSession(id)
+        removeTerminalSession(id)
         if pendingCloseTerminalID == id { pendingCloseTerminalID = nil }
         guard selectedTerminalID == id else { return }
         selectedTerminalID = nil
@@ -231,8 +239,11 @@ final class DocumentStore: ObservableObject {
             if documents.isEmpty {
                 selectedID = nil
                 // With no documents left, fall back to a terminal tab when
-                // one is open.
-                selectedTerminalID = terminals.first?.id
+                // one is open — without displacing a terminal that is
+                // already selected and visible.
+                if selectedTerminalID == nil {
+                    selectedTerminalID = terminals.first?.id
+                }
             } else {
                 let nextIndex = min(index, documents.count - 1)
                 // Re-selecting the neighbor document must not dismiss the
@@ -272,7 +283,7 @@ final class DocumentStore: ObservableObject {
     func closeAll() {
         closeAllDocuments()
         for terminal in terminals {
-            TerminalSessionManager.shared.removeSession(terminal.id)
+            removeTerminalSession(terminal.id)
         }
         terminals = []
         selectedTerminalID = nil

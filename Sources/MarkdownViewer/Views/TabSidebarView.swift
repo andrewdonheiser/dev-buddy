@@ -219,7 +219,7 @@ struct TabSidebarView: View {
                 Button {
                     store.openTerminalTab()
                 } label: {
-                    Label("Terminal", systemImage: "terminal")
+                    Label("New Terminal", systemImage: "terminal")
                 }
                 .buttonStyle(.plain)
                 .help("Open a terminal tab")
@@ -281,7 +281,7 @@ struct TabSidebarView: View {
                 guard let id else { return }
                 if id.hasPrefix(SidebarItem.terminalIDPrefix),
                    let terminalID = UUID(uuidString: String(id.dropFirst(SidebarItem.terminalIDPrefix.count))) {
-                    store.select(terminalID)
+                    store.selectTerminal(terminalID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
                     store.selectDocument(document.id)
                 } else {
@@ -334,8 +334,10 @@ struct TabSidebarView: View {
         if isSearching {
             return items.count == 1 ? "1 Result" : "\(items.count) Results"
         }
-        if store.documents.isEmpty, !store.terminals.isEmpty { return "Terminals" }
-        return store.documents.isEmpty ? "No Files" : "Open Files"
+        // The section lists documents and terminal tabs together, so the
+        // header must not call its terminal rows files.
+        if store.documents.isEmpty { return store.terminals.isEmpty ? "No Files" : "Terminals" }
+        return store.terminals.isEmpty ? "Open Files" : "Open Tabs"
     }
 
     private func filterByLabel(_ name: String) {
@@ -497,7 +499,7 @@ private struct SidebarContextMenu: View {
         if let document = item.document {
             store.selectDocument(document.id)
         } else if let terminal = item.terminal {
-            store.select(terminal.id)
+            store.selectTerminal(terminal.id)
         } else {
             store.open(url: URL(fileURLWithPath: item.path))
         }

@@ -102,6 +102,28 @@ struct TerminalTabTests {
         #expect(store.selectedTerminal?.id == terminal.id)
     }
 
+    @Test("closing the last document keeps the visible terminal selected")
+    func closingLastDocumentKeepsVisibleTerminalSelected() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let document = try #require(store.selectedDocument)
+        let first = store.openTerminalTab()
+        let second = store.openTerminalTab()
+        #expect(store.selectedTerminal?.id == second.id)
+
+        store.close(document.id)
+
+        // The fallback to the first terminal must not displace the terminal
+        // that is selected and visible.
+        #expect(store.documents.isEmpty)
+        #expect(store.selectedTerminal?.id == second.id)
+        #expect(store.terminals.map(\.id) == [first.id, second.id])
+    }
+
     @Test("closing the selected document keeps the visible terminal on screen")
     func closingDocumentKeepsTerminalVisible() throws {
         let store = makeStore()
@@ -208,11 +230,10 @@ struct TerminalTabTests {
 
     @Test("closing a terminal with a live process asks for confirmation")
     func closeWithLiveProcessAsksForConfirmation() {
-        let store = makeStore()
+        // Pretend the shell is running so no real process is spawned.
+        let store = DocumentStore(hasLiveTerminalProcess: { _ in true })
         defer { store.closeAll() }
 
-        // Pretend the shell is running so no real process is spawned.
-        store.hasLiveTerminalProcess = { _ in true }
         let terminal = store.openTerminalTab()
 
         store.requestCloseTerminal(terminal.id)
@@ -231,10 +252,10 @@ struct TerminalTabTests {
 
     @Test("canceling the close confirmation keeps the terminal open")
     func cancelCloseConfirmationKeepsTerminal() {
-        let store = makeStore()
+        // Pretend the shell is running so no real process is spawned.
+        let store = DocumentStore(hasLiveTerminalProcess: { _ in true })
         defer { store.closeAll() }
 
-        store.hasLiveTerminalProcess = { _ in true }
         let terminal = store.openTerminalTab()
 
         store.requestCloseTerminal(terminal.id)

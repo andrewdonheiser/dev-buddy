@@ -9,7 +9,6 @@ import SwiftTerm
 @MainActor
 final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalViewDelegate {
 
-    let terminalID: TerminalTab.ID
     let view = LocalProcessTerminalView(frame: .zero)
 
     /// The title the running program reports, or the working directory name
@@ -29,7 +28,6 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     private let onTitleChange: (@MainActor (String) -> Void)?
 
     init(terminal: TerminalTab, onTitleChange: (@MainActor (String) -> Void)? = nil) {
-        self.terminalID = terminal.id
         self.workingDirectory = terminal.workingDirectory
         self.title = terminal.title
         self.onTitleChange = onTitleChange
@@ -65,7 +63,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// Runs the user's default shell as a login shell — so the user's PATH
     /// (Homebrew, etc.) is available to a GUI app — inside the tab's working
     /// directory.
-    static func launchConfiguration() -> (path: String, arguments: [String]) {
+    private static func launchConfiguration() -> (path: String, arguments: [String]) {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         return (shell, ["-l"])
     }

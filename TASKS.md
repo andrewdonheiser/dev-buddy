@@ -8,7 +8,7 @@
 - [x] `TerminalPane` with SwiftTerm `LocalProcessTerminalView`: login shell in the
       selected document's folder (or home), title streaming, restart overlay
 - [x] Sessions outlive the SwiftUI view via `TerminalSessionManager`
-- [x] Sidebar: terminal rows, "Terminal" button next to Open File, context menu
+- [x] Sidebar: terminal rows, "New Terminal" button next to Open File, context menu
 - [x] ⌘T New Terminal; ⌘W, next/previous tab include terminals
 - [x] Tests for terminal tab lifecycle, selection, fallbacks and cycling
 
