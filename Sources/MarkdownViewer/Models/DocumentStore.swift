@@ -221,7 +221,7 @@ final class DocumentStore: ObservableObject {
     }
 
     /// The terminal tabs nested under a review work unit, in open order.
-    func terminals(_ id: WorkUnit.ID) -> [TerminalTab] {
+    func terminals(inWorkUnit id: WorkUnit.ID) -> [TerminalTab] {
         terminals.filter { $0.workUnitID == id }
     }
 

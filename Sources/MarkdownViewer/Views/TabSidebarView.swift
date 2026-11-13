@@ -302,7 +302,7 @@ struct TabSidebarView: View {
     /// terminals, and whose label offers another terminal in the worktree.
     private func workUnitRow(_ unit: WorkUnit) -> some View {
         DisclosureGroup(isExpanded: unitExpansion(unit.id)) {
-            ForEach(store.terminals(unit.id)) { terminal in
+            ForEach(store.terminals(inWorkUnit: unit.id)) { terminal in
                 SidebarRow(item: .terminal(terminal), onFilterLabel: filterByLabel)
                     .tag(SidebarItem.terminalRowID(for: terminal.id))
                     .contextMenu { SidebarContextMenu(item: .terminal(terminal)) }
@@ -405,10 +405,10 @@ struct TabSidebarView: View {
     }
 
     /// Selects an open tab or work unit, or opens the file when the row is a
-    /// search result. The cross-store clearing — selecting a document or
-    /// terminal clears the work-unit selection — lives in
-    /// `SelectionCoordinator`, which watches every selection path, so this
-    /// binding only routes the click.
+    /// search result. Selecting one kind of tab clears the others' selection
+    /// — directly here for sidebar clicks, and for every other selection
+    /// path in `SelectionCoordinator` — so the detail column follows
+    /// exactly what the user clicked.
     private var selection: Binding<String?> {
         Binding(
             get: {
@@ -428,10 +428,13 @@ struct TabSidebarView: View {
                     // terminal, mirroring how selecting a document does.
                     store.dismissTerminalPane()
                 } else if let terminalID = SidebarItem.terminalID(fromRowID: id) {
+                    workUnits.deselect()
                     store.selectTerminal(terminalID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
+                    workUnits.deselect()
                     store.selectDocument(document.id)
                 } else {
+                    workUnits.deselect()
                     store.open(url: URL(fileURLWithPath: id))
                 }
             }
@@ -483,12 +486,9 @@ struct TabSidebarView: View {
 
     /// The heading over the open-tab section: one stable name regardless of
     /// the tab mix, so the header the user learned never renames itself as
-    /// terminals or reviews come and go. Review work units render in this
-    /// section, so they count toward it — with only reviews open (the
-    /// normal state after a relaunch, since units persist while terminals
-    /// do not) the header must not claim "No Files".
-    static func sectionTitle(documentCount: Int, terminalCount: Int, workUnitCount: Int = 0) -> String {
-        documentCount == 0 && terminalCount == 0 && workUnitCount == 0 ? "No Files" : "Open Tabs"
+    /// terminals or reviews come and go.
+    static func sectionTitle(documentCount: Int, terminalCount: Int) -> String {
+        documentCount == 0 && terminalCount == 0 ? "No Files" : "Open Tabs"
     }
 
     private var sectionTitle: String {
@@ -496,8 +496,7 @@ struct TabSidebarView: View {
             return items.count == 1 ? "1 Result" : "\(items.count) Results"
         }
         return Self.sectionTitle(documentCount: store.documents.count,
-                                 terminalCount: store.terminals.count,
-                                 workUnitCount: workUnits.activeUnits.count)
+                                 terminalCount: store.terminals.count)
     }
 
     private func filterByLabel(_ name: String) {

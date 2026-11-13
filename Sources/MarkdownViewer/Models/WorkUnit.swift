@@ -8,30 +8,6 @@ struct PullRequest: Equatable {
     /// The pull request number.
     let number: Int
 
-    /// Creates a pull request reference from an `owner/repo` slug and a PR
-    /// number, or nil when the slug is not a well-formed GitHub repository
-    /// slug — two plain components of GitHub's character set, never `.`,
-    /// `..` or anything else that could escape the managed reviews folder.
-    /// This is the guarantee that keeps `url` and `cloneURL` valid URLs.
-    init?(repository: String, number: Int) {
-        let components = repository.split(separator: "/", omittingEmptySubsequences: false)
-        guard number > 0,
-              components.count == 2,
-              components.allSatisfy({ Self.isRepositoryComponent(String($0)) })
-        else { return nil }
-        self.repository = repository
-        self.number = number
-    }
-
-    /// Whether a path component is a legal GitHub owner or repository name:
-    /// ASCII letters, digits, `.`, `-` or `_` — plain characters that cannot
-    /// form a path fragment.
-    private static func isRepositoryComponent(_ component: String) -> Bool {
-        !component.isEmpty
-            && component != "." && component != ".."
-            && component.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || ".-_".contains($0)) }
-    }
-
     /// Parses a GitHub pull request URL such as
     /// `https://github.com/owner/repo/pull/123`, returning nil for anything
     /// else. The scheme is optional, `www.` is tolerated, and trailing path
@@ -58,8 +34,8 @@ struct PullRequest: Equatable {
 
     /// The canonical `https` URL of the PR, for opening in the browser.
     var url: URL {
-        // The initializer validated the slug and number, so this string is
-        // always a valid URL.
+        // The repository slug and number are constrained by `parse(url:)`,
+        // so this string is always a valid URL.
         URL(string: "https://github.com/\(repository)/pull/\(number)")!
     }
 

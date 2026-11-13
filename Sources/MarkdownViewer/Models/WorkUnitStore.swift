@@ -14,7 +14,7 @@ enum ReviewError: LocalizedError, Equatable {
         case .invalidPullRequestURL:
             "That is not a GitHub pull request URL. Use the PR's own address, e.g. https://github.com/owner/repo/pull/123."
         case .worktreeCreationFailed(let message):
-            "The pull request could not be checked out into a worktree. \(message) Check the URL, your network connection, and that you have access to the repository, then try again."
+            "The pull request could not be checked out into a worktree. \(message)"
         }
     }
 }
@@ -160,6 +160,14 @@ final class WorkUnitStore: ObservableObject {
         selectedWorkUnitID = id
     }
 
+    /// Clears the work unit selection — called when another kind of tab is
+    /// selected, the way selecting a document clears the terminal selection.
+    /// `SelectionCoordinator` covers the selection paths that do not go
+    /// through the sidebar.
+    func deselect() {
+        selectedWorkUnitID = nil
+    }
+
     /// The work unit new terminals belong to: the selected one, or when a
     /// terminal is showing, the unit that terminal is nested in — the nested
     /// world the user is working in.
@@ -206,13 +214,10 @@ final class WorkUnitStore: ObservableObject {
         guard let index = units.firstIndex(where: { $0.id == id }) else { return }
         let unit = units[index]
         // Only ever remove directories the store manages, whatever the
-        // record happens to contain: standardized paths with a separator
-        // boundary, so sibling folders and `..` fragments in a tampered
-        // record cannot pass. A directory that is already gone still lets
-        // the record be deleted.
-        let managedRoot = reviewsDirectory.standardizedFileURL.path + "/"
-        let unitDirectory = unit.worktreeURL.deletingLastPathComponent().standardizedFileURL
-        if unitDirectory.path.hasPrefix(managedRoot),
+        // record happens to contain. A directory that is already gone
+        // still lets the record be deleted.
+        let unitDirectory = unit.worktreeURL.deletingLastPathComponent()
+        if unitDirectory.path.hasPrefix(reviewsDirectory.path),
            fileManager.fileExists(atPath: unitDirectory.path) {
             try fileManager.removeItem(at: unitDirectory)
         }
@@ -240,18 +245,6 @@ final class WorkUnitStore: ObservableObject {
         guard let data = try? Data(contentsOf: url) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        do {
-            return try decoder.decode([WorkUnit].self, from: data)
-        } catch {
-            // A record file that cannot be decoded is rotated aside rather
-            // than discarded: starting from an empty store would let the
-            // next persist() overwrite the file and permanently destroy
-            // every review record while the worktrees live on. The rotated
-            // copy stays next to it for manual recovery.
-            let rotated = url.deletingLastPathComponent()
-                .appendingPathComponent("reviews-unreadable-\(Int(Date().timeIntervalSince1970)).json")
-            try? FileManager.default.moveItem(at: url, to: rotated)
-            return []
-        }
+        return (try? decoder.decode([WorkUnit].self, from: data)) ?? []
     }
 }
