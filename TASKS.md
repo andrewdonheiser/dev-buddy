@@ -138,3 +138,17 @@
 ## Verify
 - [ ] `swift build` (not run: no Swift toolchain in this sandbox — see PR)
 - [ ] `swift test` (not run: no Swift toolchain in this sandbox — see PR)
+
+# Review finding policy (issue #18)
+
+- [x] AGENTS.md "Review finding policy" section: fix high/medium findings in
+      the first fix iteration, record low/nit findings as disagreements citing
+      the policy (overridable by an explicit `/fs-fix` instruction), defer
+      accumulated lows to the dormant archive issue (#16), cross-reference
+      upstream fullsend-ai/agents#1141 and #1760
+
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
