@@ -36,6 +36,10 @@ final class WorkUnitStore: ObservableObject {
     /// terminal clears it — `SelectionCoordinator` watches every selection
     /// path, not just sidebar clicks.
     @Published private(set) var selectedWorkUnitID: WorkUnit.ID?
+    /// Why the saved review records could not be loaded, if they could not:
+    /// the user needs to know their reviews were not read and that the
+    /// unreadable file was kept on disk rather than replaced.
+    @Published private(set) var loadFailure: String?
 
     /// Runs one git command — arguments plus the directory to run it in —
     /// returning its output. Injectable so tests can fake worktree creation
@@ -49,6 +53,10 @@ final class WorkUnitStore: ObservableObject {
     private let storageURL: URL
     private let fileManager = FileManager.default
     private let now: () -> Date
+    /// True when an unreadable record file could not be rotated aside:
+    /// writing a new one would destroy it, so persistence is withheld
+    /// until the user resolves the situation.
+    private let withholdPersistence: Bool
 
     init(reviewsDirectory: URL = WorkUnitStore.defaultReviewsDirectory,
          git: @escaping GitRunner = { arguments, directory in
@@ -61,7 +69,10 @@ final class WorkUnitStore: ObservableObject {
             .appendingPathComponent("reviews.json")
         self.git = git
         self.now = now
-        self.units = WorkUnitStore.load(from: storageURL)
+        let records = WorkUnitStore.load(from: storageURL)
+        self.units = records.units
+        self.loadFailure = records.failure
+        self.withholdPersistence = records.unreadableFileWasLeftInPlace
     }
 
     nonisolated static var defaultReviewsDirectory: URL {
@@ -229,6 +240,9 @@ final class WorkUnitStore: ObservableObject {
     // MARK: - Persistence
 
     private func persist() {
+        // An unreadable record file that could not be rotated aside must
+        // not be overwritten — the saved reviews stay recoverable on disk.
+        guard !withholdPersistence else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -241,10 +255,45 @@ final class WorkUnitStore: ObservableObject {
         }
     }
 
-    private static func load(from url: URL) -> [WorkUnit] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+    /// What `load(from:)` read: the units, and when the record file could
+    /// not be decoded, the failure to show the user and whether the
+    /// unreadable file had to be left in place (so it must not be
+    /// overwritten).
+    private struct LoadedRecords {
+        var units: [WorkUnit] = []
+        var failure: String?
+        var unreadableFileWasLeftInPlace = false
+    }
+
+    private static func load(from url: URL) -> LoadedRecords {
+        guard let data = try? Data(contentsOf: url) else { return LoadedRecords() }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([WorkUnit].self, from: data)) ?? []
+        do {
+            var records = LoadedRecords()
+            records.units = try decoder.decode([WorkUnit].self, from: data)
+            return records
+        } catch {
+            // A record file that cannot be decoded must not be silently
+            // discarded: starting from an empty store would let the next
+            // persist() overwrite it, permanently destroying every review
+            // record while the worktrees live on. Rotate it aside so the
+            // records stay recoverable, and say so — an empty sidebar with
+            // no explanation reads as if the reviews never existed.
+            let fileManager = FileManager.default
+            let rotated = url.deletingLastPathComponent()
+                .appendingPathComponent("reviews-unreadable-\(Int(Date().timeIntervalSince1970)).json")
+            var records = LoadedRecords()
+            do {
+                try fileManager.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+                try fileManager.moveItem(at: url, to: rotated)
+                records.failure = "Saved reviews could not be read. The unreadable record file was kept as \(rotated.lastPathComponent) beside reviews.json so it can be recovered."
+            } catch {
+                records.unreadableFileWasLeftInPlace = true
+                records.failure = "Saved reviews could not be read, and the unreadable record file could not be set aside. It was left untouched so it can be recovered; reviews will not be saved until it is resolved."
+            }
+            return records
+        }
     }
 }

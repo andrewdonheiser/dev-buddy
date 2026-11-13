@@ -164,7 +164,12 @@ struct ReviewOverviewView: View {
                 store.closeTerminal(terminal.id)
             }
         } catch {
-            deleteError = "The review's files could not be removed: \(error.localizedDescription)"
+            let message = "The review's files could not be removed: \(error.localizedDescription)"
+            deleteError = message
+            // The user just confirmed a destructive action; the failure has
+            // to reach assistive technology too, the way the wizard's
+            // errors do.
+            AccessibilityNotification.Announcement(message).post()
         }
     }
 }

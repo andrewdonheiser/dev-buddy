@@ -179,6 +179,9 @@ struct TabSidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchBar
+            if let loadFailure = workUnits.loadFailure {
+                recordsNotice(loadFailure)
+            }
             if let id = activeLabelID, let label = labels.label(id: id) {
                 activeFilterBar(label)
             }
@@ -375,6 +378,23 @@ struct TabSidebarView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Start something new — the first workflow is reviewing a pull request")
+    }
+
+    /// The banner shown when saved reviews could not be read: the reviews
+    /// still exist on disk, and the message says where the unreadable
+    /// record file was kept so it can be recovered.
+    private func recordsNotice(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.quaternary.opacity(0.5))
     }
 
     @ViewBuilder

@@ -21,10 +21,11 @@ final class GitRecorder: @unchecked Sendable {
             throw NSError(domain: "GitRecorder", code: 128,
                           userInfo: [NSLocalizedDescriptionKey: "fatal: repository not found"])
         }
-        if arguments.first == "clone", arguments.count >= 4 {
+        if arguments.first == "clone", arguments.count >= 5 {
             // The real clone-plus-worktree leaves the worktree directory on
             // disk; the fake creates both it and the bare clone directory.
-            let repository = URL(fileURLWithPath: arguments[3])
+            // The clone's destination is the argument after the URL.
+            let repository = URL(fileURLWithPath: arguments[4])
             let worktree = repository.deletingLastPathComponent()
                 .appendingPathComponent("worktree", isDirectory: true)
             try? FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
@@ -267,6 +268,65 @@ struct WorkUnitStoreTests {
             atPath: unit.worktreeURL.deletingLastPathComponent().path))
 
         try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+    }
+
+    @Test("an undecodable record file is rotated aside and reported, not overwritten")
+    func undecodableRecordsAreRotatedAndReported() async throws {
+        let fixture = WorkUnitFixture()
+        try FileManager.default.createDirectory(at: fixture.storageURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "{\"not\": \"valid\"}".data(using: .utf8)!.write(to: fixture.storageURL)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory,
+                                  git: { _, _ in "" })
+        #expect(store.units.isEmpty)
+        #expect(store.loadFailure != nil)
+
+        // Creating a review persists a fresh record file; the unreadable
+        // one must have been rotated aside, not destroyed.
+        _ = try await store.createReview(prURLString: "https://github.com/owner/repo/pull/12",
+                                         issueReference: nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.storageURL.path))
+        let directory = fixture.storageURL.deletingLastPathComponent().path
+        let rotated = ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+            .first { $0.hasPrefix("reviews-unreadable-") }
+        #expect(rotated != nil)
+        if let rotated {
+            let contents = try String(contentsOf: fixture.storageURL.deletingLastPathComponent()
+                .appendingPathComponent(rotated), encoding: .utf8)
+            #expect(contents.contains("not"))
+        }
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+    }
+
+    @Test("an unreadable record file that cannot be rotated is never overwritten")
+    func unrotatableRecordsAreNotOverwritten() async throws {
+        let fixture = WorkUnitFixture()
+        try FileManager.default.createDirectory(at: fixture.storageURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "{\"not\": \"valid\"}".data(using: .utf8)!.write(to: fixture.storageURL)
+        // A read-only records folder keeps the unreadable file from being
+        // rotated aside, the way a locked file would.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555],
+                                              ofItemAtPath: fixture.storageURL.deletingLastPathComponent().path)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory,
+                                  git: { _, _ in "" })
+        #expect(store.units.isEmpty)
+        #expect(store.loadFailure != nil)
+
+        // The store keeps working in memory, but nothing it does may
+        // overwrite the file the unreadable records live in.
+        _ = try await store.createReview(prURLString: "https://github.com/owner/repo/pull/12",
+                                         issueReference: nil)
+        #expect(store.units.count == 1)
+        let contents = try String(contentsOf: fixture.storageURL, encoding: .utf8)
+        #expect(contents.contains("not"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: fixture.storageURL.deletingLastPathComponent().path)
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
     }
 
     @Test("unit records survive a new store reading the same folder")
