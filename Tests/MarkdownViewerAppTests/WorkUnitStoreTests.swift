@@ -242,10 +242,15 @@ struct WorkUnitStoreTests {
             issueReference: nil)
         fixture.store.select(unit.id)
 
-        // A read-only reviews folder makes the disk removal fail, the way a
-        // locked or busy worktree would.
+        // A read-only unit folder makes the disk removal fail, the way a
+        // locked or busy worktree would: `removeItem` needs write access to
+        // the unit directory itself to unlink the clone and worktree inside
+        // it, so the worktree's contents survive the failure intact. (The
+        // reviews folder's own permissions never gate the removal — the
+        // unit directory is two levels below it.)
+        let unitDirectory = unit.worktreeURL.deletingLastPathComponent()
         try FileManager.default.setAttributes([.posixPermissions: 0o555],
-                                              ofItemAtPath: fixture.reviewsDirectory.path)
+                                              ofItemAtPath: unitDirectory.path)
         do {
             try fixture.store.delete(unit.id)
             Issue.record("expected delete to throw")
@@ -253,7 +258,7 @@ struct WorkUnitStoreTests {
             // The expected failure.
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o755],
-                                              ofItemAtPath: fixture.reviewsDirectory.path)
+                                              ofItemAtPath: unitDirectory.path)
 
         // The record and selection survive the failure, so the overview —
         // and its error — stays on screen and the delete can be retried.
