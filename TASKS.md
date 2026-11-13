@@ -113,3 +113,28 @@
 ## Verify
 - [ ] `swift build` (not runnable in this sandbox: no macOS toolchain)
 - [ ] `swift test` (not runnable in this sandbox: no macOS toolchain)
+
+# PR Review Workflow (issue #4)
+
+## App
+- [x] `WorkUnit` model + `PullRequest` URL parsing (GitHub PR URLs, distinct
+      invalid-URL error)
+- [x] `WorkUnitStore`: git clone + worktree under a managed Application
+      Support folder, selection, archive (keeps the worktree) and delete
+      (removes it), JSON persistence so reviews survive relaunches
+- [x] "New" button in the sidebar with the review workflow first; wizard sheet
+      asking for the PR URL and an optional Jira/GitHub issue
+- [x] On wizard confirm: PR checked out into a git worktree, terminal opened
+      in the worktree, PR opened in the browser
+- [x] Nested tab tree in the sidebar: one disclosure group per work unit with
+      its terminals nested under it (structure from the reverted bfd6f04,
+      without the workspace layer); archived reviews in their own section
+- [x] New terminals (sidebar button, ⌘T, unit row +) open in the active work
+      unit's worktree; other units' terminals are unaffected
+- [x] Review overview in the detail column: PR/issue/worktree facts plus
+      open-in-browser, reveal, new-terminal, archive and delete (confirmed)
+      actions
+
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — see PR)

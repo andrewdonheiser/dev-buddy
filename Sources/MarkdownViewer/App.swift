@@ -9,6 +9,7 @@ struct MarkdownViewerApp: App {
     @StateObject private var labels = LabelStore.shared
     @StateObject private var options = ViewOptions.shared
     @StateObject private var savedViews = SavedViewStore.shared
+    @StateObject private var workUnits = WorkUnitStore.shared
     @StateObject private var chat = ChatStore.shared
     @StateObject private var chatSettings = ChatSettings.shared
     @StateObject private var apiKeys = APIKeyStore.shared
@@ -23,6 +24,7 @@ struct MarkdownViewerApp: App {
                 .environmentObject(labels)
                 .environmentObject(options)
                 .environmentObject(savedViews)
+                .environmentObject(workUnits)
                 .environmentObject(chat)
                 .environmentObject(chatSettings)
                 .environmentObject(apiKeys)
@@ -62,7 +64,7 @@ struct MarkdownViewerApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 .disabled(!store.canCloseSelected)
-                Button("New Terminal") { store.openTerminalTab() }
+                Button("New Terminal") { store.openTerminalInActiveWorkUnit(workUnits: workUnits) }
                     .keyboardShortcut("t", modifiers: .command)
                 Divider()
                 Button("Save View…") { promptForNewView() }
@@ -114,9 +116,16 @@ struct MarkdownViewerApp: App {
 /// ensures the app behaves as a regular foreground app when run as a bundle.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Wires the cross-store selection rule (see `SelectionCoordinator`)
+    /// for the app's lifetime.
+    private var selection: SelectionCoordinator?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        selection = SelectionCoordinator(store: DocumentStore.shared,
+                                         workUnits: WorkUnitStore.shared)
 
         let fileArguments = CommandLine.arguments
             .dropFirst()

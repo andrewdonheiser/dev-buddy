@@ -83,6 +83,18 @@ final class DocumentStore: ObservableObject {
         return terminals.first { $0.id == selectedTerminalID }
     }
 
+    /// The document-selection stream, for the cross-store wiring in
+    /// `SelectionCoordinator` — selection stays settable only inside the
+    /// store, so the coordinator observes instead.
+    var documentSelectionUpdates: AnyPublisher<OpenDocument.ID?, Never> {
+        $selectedID.eraseToAnyPublisher()
+    }
+
+    /// The terminal-selection stream, likewise.
+    var terminalSelectionUpdates: AnyPublisher<TerminalTab.ID?, Never> {
+        $selectedTerminalID.eraseToAnyPublisher()
+    }
+
     /// Selects a document for reading and the chat panel, returning the
     /// detail column to Markdown — the single place the "selecting a
     /// document leaves the terminal pane" rule lives. Unknown ids are
@@ -117,10 +129,19 @@ final class DocumentStore: ObservableObject {
         selectedTerminalID = id
     }
 
-    /// Opens a terminal tab running the user's login shell in `directory`.
+    /// Returns the detail column from the terminal pane without touching the
+    /// surviving document selection — the counterpart to
+    /// `selectDocument(_:)`'s pane rule, used when a review work unit's
+    /// overview takes the column.
+    func dismissTerminalPane() {
+        selectedTerminalID = nil
+    }
+
+    /// Opens a terminal tab running the user's login shell in `directory`,
+    /// nested under the review work unit when one is given.
     @discardableResult
-    func openTerminal(in directory: URL) -> TerminalTab {
-        let terminal = TerminalTab(workingDirectory: directory)
+    func openTerminal(in directory: URL, workUnitID: WorkUnit.ID? = nil) -> TerminalTab {
+        let terminal = TerminalTab(workingDirectory: directory, workUnitID: workUnitID)
         terminals.append(terminal)
         selectedTerminalID = terminal.id
         return terminal
@@ -133,6 +154,31 @@ final class DocumentStore: ObservableObject {
         let directory = selectedDocument?.url.deletingLastPathComponent()
             ?? FileManager.default.homeDirectoryForCurrentUser
         return openTerminal(in: directory)
+    }
+
+    /// Opens a terminal tab in the active review work unit's worktree — the
+    /// selected unit, or the unit the visible terminal belongs to — or, with
+    /// no active unit, wherever `openTerminalTab()` would. The single place
+    /// the "where a new terminal opens" rule lives; the ⌘T menu item and
+    /// the sidebar's New Terminal button both go through it.
+    @discardableResult
+    func openTerminalInActiveWorkUnit(workUnits: WorkUnitStore) -> TerminalTab {
+        if let unit = workUnits.activeUnit(forSelectedTerminal: selectedTerminal) {
+            return openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
+        }
+        return openTerminalTab()
+    }
+
+    /// Tooltip text describing where `openTerminalInActiveWorkUnit(workUnits:)`
+    /// opens its terminal — the same rule, described once for both callers.
+    func newTerminalHelp(workUnits: WorkUnitStore) -> String {
+        if let unit = workUnits.activeUnit(forSelectedTerminal: selectedTerminal) {
+            return "Open a terminal tab in the \(unit.title) worktree"
+        }
+        if selectedDocument != nil {
+            return "Open a terminal tab in the selected file's folder"
+        }
+        return "Open a terminal tab in your home folder"
     }
 
     /// Closes a terminal tab and stops its process.
@@ -172,6 +218,11 @@ final class DocumentStore: ObservableObject {
     /// Dismisses the close confirmation without closing anything.
     func cancelCloseTerminal() {
         pendingCloseTerminalID = nil
+    }
+
+    /// The terminal tabs nested under a review work unit, in open order.
+    func terminals(inWorkUnit id: WorkUnit.ID) -> [TerminalTab] {
+        terminals.filter { $0.workUnitID == id }
     }
 
     /// Updates a terminal tab's title as the running program reports it.
