@@ -85,6 +85,19 @@ targets: `MarkdownViewerKitTests`, `MarkdownViewerChatTests`,
 - Failure paths are distinct from normal-exit paths, with a plain-language
   reason.
 
+## Review finding policy
+
+- **Fix high- and medium-severity review findings** in the first fix
+  iteration.
+- **Record low-severity and nit findings as disagreements** citing this
+  policy instead of fixing them, unless the human's `/fs-fix` instruction
+  explicitly asks for them (e.g. `/fs-fix fix everything` overrides this
+  default).
+- **Defer accumulated low findings** to the dormant archive issue (#16)
+  rather than spending further fix rounds on them. The upstream verdict-side
+  behavior for low-only findings is tracked elsewhere
+  (fullsend-ai/agents#1141, #1760).
+
 ## Workflow conventions
 
 - `TASKS.md` is the running task log: per-feature checklists with a Verify
