@@ -32,15 +32,18 @@ enum SidebarSort: String, CaseIterable, Identifiable {
     }
 }
 
-/// A row in the sidebar: an open tab (document or terminal) or a search
-/// result for a file that is not currently open.
+/// A row in the sidebar: an open tab (document or terminal), a review work
+/// unit, or a search result for a file that is not currently open.
 enum SidebarItem: Identifiable {
     case open(OpenDocument, [String])
     case terminal(TerminalTab)
+    case workUnit(WorkUnit)
     case result(LabeledFile)
 
     /// Prefix marking a terminal tab row.
     static let terminalIDPrefix = "terminal:"
+    /// Prefix marking a review work unit row.
+    static let workUnitIDPrefix = "workunit:"
 
     /// The row identity encoding a terminal tab: the sidebar's List
     /// selection bridges through String, so the prefix distinguishes
@@ -55,6 +58,17 @@ enum SidebarItem: Identifiable {
         return UUID(uuidString: String(rowID.dropFirst(terminalIDPrefix.count)))
     }
 
+    /// The row identity encoding a review work unit.
+    static func workUnitRowID(for id: WorkUnit.ID) -> String {
+        workUnitIDPrefix + id.uuidString
+    }
+
+    /// The work unit id encoded in a row identity, if the row is one.
+    static func workUnitID(fromRowID rowID: String) -> WorkUnit.ID? {
+        guard rowID.hasPrefix(workUnitIDPrefix) else { return nil }
+        return UUID(uuidString: String(rowID.dropFirst(workUnitIDPrefix.count)))
+    }
+
     /// The terminal tabs a sidebar search surfaces: terminals match by title
     /// or working directory and carry no labels, so a label-only filter (an
     /// empty query) excludes them.
@@ -67,10 +81,23 @@ enum SidebarItem: Identifiable {
         }
     }
 
+    /// The review work units a sidebar search surfaces: units match by title,
+    /// PR URL or linked issue. Like terminals, an empty query excludes them.
+    static func workUnits(matchingQuery query: String, in units: [WorkUnit]) -> [WorkUnit] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        return units.filter {
+            $0.title.localizedCaseInsensitiveContains(trimmed)
+                || $0.prURL.absoluteString.localizedCaseInsensitiveContains(trimmed)
+                || ($0.issueReference?.localizedCaseInsensitiveContains(trimmed) ?? false)
+        }
+    }
+
     var id: String {
         switch self {
         case .open(let document, _): return document.url.path
         case .terminal(let terminal): return Self.terminalRowID(for: terminal.id)
+        case .workUnit(let unit): return Self.workUnitRowID(for: unit.id)
         case .result(let file): return file.path
         }
     }
@@ -79,6 +106,7 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(let document, _): return document.url.path
         case .terminal(let terminal): return terminal.workingDirectory.path
+        case .workUnit(let unit): return unit.worktreePath
         case .result(let file): return file.path
         }
     }
@@ -93,10 +121,16 @@ enum SidebarItem: Identifiable {
         return nil
     }
 
+    var workUnit: WorkUnit? {
+        if case .workUnit(let unit) = self { return unit }
+        return nil
+    }
+
     var title: String {
         switch self {
         case .open(let document, _): return document.title
         case .terminal(let terminal): return terminal.title
+        case .workUnit(let unit): return unit.title
         case .result(let file): return file.displayName
         }
     }
@@ -105,6 +139,9 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(let document, _): return document.fileName
         case .terminal(let terminal): return terminal.workingDirectory.lastPathComponent
+        case .workUnit(let unit):
+            if let issue = unit.issueReference, !issue.isEmpty { return issue }
+            return unit.prURL.absoluteString
         case .result(let file): return file.fileName
         }
     }
@@ -113,21 +150,28 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(_, let names): return names
         case .terminal: return []
+        case .workUnit: return []
         case .result(let file): return file.labels
         }
     }
 }
 
-/// The left sidebar: open tabs, colored label buttons, and a search field that
-/// surfaces labeled files (open or not) which can be opened from the results.
+/// The left sidebar: open tabs, review work units with their nested
+/// terminals, colored label buttons, and a search field that surfaces
+/// labeled files (open or not) which can be opened from the results.
 struct TabSidebarView: View {
     @EnvironmentObject private var store: DocumentStore
     @EnvironmentObject private var labels: LabelStore
     @EnvironmentObject private var savedViews: SavedViewStore
+    @EnvironmentObject private var workUnits: WorkUnitStore
 
     @State private var query = ""
     @State private var sort: SidebarSort = .openOrder
     @State private var activeLabelID: FileLabel.ID?
+    /// Review work units whose nested terminals are collapsed; units start
+    /// expanded so the terminals the review opened are visible.
+    @State private var collapsedUnitIDs: Set<WorkUnit.ID> = []
+    @State private var isReviewWizardPresented = false
 
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
     private var isSearching: Bool { !trimmedQuery.isEmpty || activeLabelID != nil }
@@ -143,6 +187,9 @@ struct TabSidebarView: View {
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 380)
         .safeAreaInset(edge: .bottom) { bottomBar }
+        .sheet(isPresented: $isReviewWizardPresented) {
+            ReviewWizardView()
+        }
     }
 
     // MARK: - Search & sort controls
@@ -218,38 +265,87 @@ struct TabSidebarView: View {
 
     private var list: some View {
         List(selection: selection) {
-            Section {
-                ForEach(items) { item in
-                    SidebarRow(item: item, onFilterLabel: filterByLabel)
-                        .tag(item.id)
-                        .contextMenu { SidebarContextMenu(item: item) }
+            if isSearching {
+                Section(sectionTitle) {
+                    ForEach(items) { item in
+                        SidebarRow(item: item, onFilterLabel: filterByLabel)
+                            .tag(item.id)
+                            .contextMenu { SidebarContextMenu(item: item) }
+                    }
                 }
-            } header: {
-                Text(sectionTitle)
+            } else {
+                Section(sectionTitle) {
+                    // Each review is a nested world: its terminals sit under
+                    // it in the tree, one disclosure group per work unit.
+                    ForEach(workUnits.activeUnits) { unit in
+                        workUnitRow(unit)
+                    }
+                    ForEach(openItems) { item in
+                        SidebarRow(item: item, onFilterLabel: filterByLabel)
+                            .tag(item.id)
+                            .contextMenu { SidebarContextMenu(item: item) }
+                    }
+                }
+                if !workUnits.archivedUnits.isEmpty {
+                    Section("Archived Reviews") {
+                        ForEach(workUnits.archivedUnits) { unit in
+                            workUnitRow(unit)
+                        }
+                    }
+                }
             }
         }
         .listStyle(.sidebar)
     }
 
+    /// A work unit row: a disclosure group whose children are the unit's
+    /// terminals, and whose label offers another terminal in the worktree.
+    private func workUnitRow(_ unit: WorkUnit) -> some View {
+        DisclosureGroup(isExpanded: unitExpansion(unit.id)) {
+            ForEach(store.terminals(inWorkUnit: unit.id)) { terminal in
+                SidebarRow(item: .terminal(terminal), onFilterLabel: filterByLabel)
+                    .tag(SidebarItem.terminalRowID(for: terminal.id))
+                    .contextMenu { SidebarContextMenu(item: .terminal(terminal)) }
+            }
+        } label: {
+            WorkUnitRowLabel(unit: unit)
+        }
+        .tag(SidebarItem.workUnitRowID(for: unit.id))
+        .contextMenu { SidebarContextMenu(item: .workUnit(unit)) }
+    }
+
+    /// The expansion binding for a work unit's nested terminals.
+    private func unitExpansion(_ id: WorkUnit.ID) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedUnitIDs.contains(id) },
+            set: { expanded in
+                if expanded {
+                    collapsedUnitIDs.remove(id)
+                } else {
+                    collapsedUnitIDs.insert(id)
+                }
+            }
+        )
+    }
+
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
+                newMenu
                 Button {
                     store.presentOpenPanel()
                 } label: {
-                    Label("Open File…", systemImage: "plus")
+                    Label("Open File…", systemImage: "folder")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
                 Button {
-                    store.openTerminalTab()
+                    openNewTerminal()
                 } label: {
                     Label("New Terminal", systemImage: "terminal")
                 }
                 .buttonStyle(.plain)
-                .help(store.selectedDocument != nil
-                      ? "Open a terminal tab in the selected file's folder"
-                      : "Open a terminal tab in your home folder")
+                .help(newTerminalHelp)
             }
             HStack(spacing: 8) {
                 Button {
@@ -266,6 +362,41 @@ struct TabSidebarView: View {
         }
         .padding(10)
         .background(.bar)
+    }
+
+    /// The "New" button: the entry point for starting something new, with
+    /// the review workflow first.
+    private var newMenu: some View {
+        Menu {
+            Button("Review PR…") { isReviewWizardPresented = true }
+        } label: {
+            Label("New", systemImage: "plus")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Start something new — the first workflow is reviewing a pull request")
+    }
+
+    /// New terminals follow the active work unit — the selected one, or the
+    /// unit the visible terminal belongs to — and open in its worktree;
+    /// without one they keep their old rule (the selected document's
+    /// folder, or home).
+    private func openNewTerminal() {
+        if let unit = workUnits.activeUnit(forSelectedTerminal: store.selectedTerminal) {
+            store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
+        } else {
+            store.openTerminalTab()
+        }
+    }
+
+    private var newTerminalHelp: String {
+        if let unit = workUnits.activeUnit(forSelectedTerminal: store.selectedTerminal) {
+            return "Open a terminal tab in the \(unit.title) worktree"
+        }
+        if store.selectedDocument != nil {
+            return "Open a terminal tab in the selected file's folder"
+        }
+        return "Open a terminal tab in your home folder"
     }
 
     @ViewBuilder
@@ -295,49 +426,72 @@ struct TabSidebarView: View {
         }
     }
 
-    /// Selects an open tab, or opens the file when the row is a search result.
+    /// Selects an open tab or work unit, or opens the file when the row is a
+    /// search result. Selecting one kind of tab clears the others' selection,
+    /// so the detail column follows exactly what the user clicked.
     private var selection: Binding<String?> {
         Binding(
             get: {
                 if let terminal = store.selectedTerminal {
                     return SidebarItem.terminalRowID(for: terminal.id)
                 }
+                if let unit = workUnits.selectedWorkUnit {
+                    return SidebarItem.workUnitRowID(for: unit.id)
+                }
                 return store.selectedDocument?.url.path
             },
             set: { id in
                 guard let id else { return }
-                if let terminalID = SidebarItem.terminalID(fromRowID: id) {
+                if let unitID = SidebarItem.workUnitID(fromRowID: id) {
+                    workUnits.select(unitID)
+                    // The overview takes the detail column from a visible
+                    // terminal, mirroring how selecting a document does.
+                    store.dismissTerminalPane()
+                } else if let terminalID = SidebarItem.terminalID(fromRowID: id) {
+                    workUnits.deselect()
                     store.selectTerminal(terminalID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
+                    workUnits.deselect()
                     store.selectDocument(document.id)
                 } else {
+                    workUnits.deselect()
                     store.open(url: URL(fileURLWithPath: id))
                 }
             }
         )
     }
 
+    /// The search-mode rows: matching files (open or not), terminals and
+    /// review work units.
     private var items: [SidebarItem] {
-        if isSearching {
-            var files = labels.search(query: trimmedQuery, sort: sort.searchOrder ?? .label)
-            if let id = activeLabelID, let name = labels.label(id: id)?.name {
-                files = files.filter { $0.labels.contains(name) }
-            }
-            var results = files.map { file -> SidebarItem in
-                if let document = store.documents.first(where: { $0.url.path == file.path }) {
-                    return .open(document, file.labels)
-                }
-                return .result(file)
-            }
-            // Terminal tabs match by title or directory; they carry no labels.
-            results += SidebarItem.terminals(matchingQuery: trimmedQuery, in: store.terminals)
-                .map { SidebarItem.terminal($0) }
-            return results
+        var files = labels.search(query: trimmedQuery, sort: sort.searchOrder ?? .label)
+        if let id = activeLabelID, let name = labels.label(id: id)?.name {
+            files = files.filter { $0.labels.contains(name) }
         }
+        var results = files.map { file -> SidebarItem in
+            if let document = store.documents.first(where: { $0.url.path == file.path }) {
+                return .open(document, file.labels)
+            }
+            return .result(file)
+        }
+        // Terminal tabs match by title or directory; they carry no labels.
+        results += SidebarItem.terminals(matchingQuery: trimmedQuery, in: store.terminals)
+            .map { SidebarItem.terminal($0) }
+        // Review work units match by title, PR URL or linked issue.
+        results += SidebarItem.workUnits(matchingQuery: trimmedQuery, in: workUnits.units)
+            .map { SidebarItem.workUnit($0) }
+        return results
+    }
+
+    /// The non-search rows that are not nested under a work unit: documents
+    /// and top-level terminals, in the chosen order.
+    private var openItems: [SidebarItem] {
         var openItems = orderedDocuments.map { document in
             SidebarItem.open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
         }
-        openItems += store.terminals.map { SidebarItem.terminal($0) }
+        openItems += store.terminals
+            .filter { $0.workUnitID == nil }
+            .map { SidebarItem.terminal($0) }
         return openItems
     }
 
@@ -352,7 +506,7 @@ struct TabSidebarView: View {
 
     /// The heading over the open-tab section: one stable name regardless of
     /// the tab mix, so the header the user learned never renames itself as
-    /// terminals come and go.
+    /// terminals or reviews come and go.
     static func sectionTitle(documentCount: Int, terminalCount: Int) -> String {
         documentCount == 0 && terminalCount == 0 ? "No Files" : "Open Tabs"
     }
@@ -372,6 +526,50 @@ struct TabSidebarView: View {
     }
 }
 
+/// The label of a work unit row: icon, title, the PR or linked issue as the
+/// caption, and a button opening another terminal in the unit's worktree.
+private struct WorkUnitRowLabel: View {
+    @EnvironmentObject private var store: DocumentStore
+    let unit: WorkUnit
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(unit.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            Button {
+                store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open another terminal in this review's worktree")
+            .accessibilityLabel("New terminal in review \(unit.title)")
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// The linked issue when the wizard recorded one, otherwise the PR URL.
+    private var caption: String {
+        if let issue = unit.issueReference, !issue.isEmpty { return issue }
+        return unit.prURL.absoluteString
+    }
+}
+
 /// A single sidebar row with its label buttons and per-tab actions.
 private struct SidebarRow: View {
     @EnvironmentObject private var store: DocumentStore
@@ -381,6 +579,10 @@ private struct SidebarRow: View {
     var body: some View {
         if let terminal = item.terminal {
             terminalRow(terminal)
+        } else if let unit = item.workUnit {
+            // The search-mode rendering; the tree nests work units through
+            // `TabSidebarView.workUnitRow(_:)` instead.
+            WorkUnitRowLabel(unit: unit)
         } else {
             tabRow
         }
@@ -489,12 +691,53 @@ private struct SidebarRow: View {
     }
 }
 
-/// The right-click menu shared by open tabs and search results.
+/// The right-click menu shared by open tabs, work units and search results.
 private struct SidebarContextMenu: View {
     @EnvironmentObject private var store: DocumentStore
+    @EnvironmentObject private var workUnits: WorkUnitStore
     let item: SidebarItem
 
     var body: some View {
+        if let unit = item.workUnit {
+            workUnitMenu(unit)
+        } else {
+            tabMenu
+        }
+    }
+
+    /// The work unit menu: the nested world's actions.
+    @ViewBuilder
+    private func workUnitMenu(_ unit: WorkUnit) -> some View {
+        Button("Open Pull Request") {
+            NSWorkspace.shared.open(unit.prURL)
+        }
+        Button("New Terminal in Worktree") {
+            store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
+        }
+        Divider()
+        Button("Reveal Worktree in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([unit.worktreeURL])
+        }
+        Button("Copy Path") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(unit.worktreePath, forType: .string)
+        }
+        Divider()
+        if unit.isArchived {
+            Button("Restore Review") {
+                workUnits.unarchive(unit.id)
+                workUnits.select(unit.id)
+            }
+        } else {
+            Button("Archive Review") {
+                workUnits.archive(unit.id)
+            }
+        }
+    }
+
+    /// The document, terminal and search-result menu.
+    @ViewBuilder
+    private var tabMenu: some View {
         Button("Open") { open() }
         if item.terminal == nil {
             Menu("Labels") { LabelMenuItems(path: item.path) }

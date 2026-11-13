@@ -7,6 +7,7 @@ struct MainView: View {
     @EnvironmentObject private var store: DocumentStore
     @EnvironmentObject private var labels: LabelStore
     @EnvironmentObject private var options: ViewOptions
+    @EnvironmentObject private var workUnits: WorkUnitStore
 
     /// Whether the right-hand chat panel is showing.
     @AppStorage(ChatPanel.visibleKey) private var chatVisible = true
@@ -52,12 +53,18 @@ struct MainView: View {
 
     @ViewBuilder
     private var detail: some View {
+        // Detail-column precedence: a selected terminal keeps the column
+        // (over the surviving document selection, as before), then the
+        // selected review work unit's overview, then the selected document.
         if let terminal = store.selectedTerminal {
             // A terminal tab keeps the chat panel on screen, bound to the
             // selected document when one is open.
             chatSplit(TerminalPane(terminal: terminal)
                 .id(terminal.id),
                 document: store.selectedDocument)
+        } else if let unit = workUnits.selectedWorkUnit {
+            ReviewOverviewView(unit: unit)
+                .id(unit.id)
         } else if let document = store.selectedDocument {
             chatSplit(documentColumn(for: document), document: document)
         } else {

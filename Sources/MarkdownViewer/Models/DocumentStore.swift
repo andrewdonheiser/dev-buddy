@@ -117,10 +117,19 @@ final class DocumentStore: ObservableObject {
         selectedTerminalID = id
     }
 
-    /// Opens a terminal tab running the user's login shell in `directory`.
+    /// Returns the detail column from the terminal pane without touching the
+    /// surviving document selection — the counterpart to
+    /// `selectDocument(_:)`'s pane rule, used when a review work unit's
+    /// overview takes the column.
+    func dismissTerminalPane() {
+        selectedTerminalID = nil
+    }
+
+    /// Opens a terminal tab running the user's login shell in `directory`,
+    /// nested under the review work unit when one is given.
     @discardableResult
-    func openTerminal(in directory: URL) -> TerminalTab {
-        let terminal = TerminalTab(workingDirectory: directory)
+    func openTerminal(in directory: URL, workUnitID: WorkUnit.ID? = nil) -> TerminalTab {
+        let terminal = TerminalTab(workingDirectory: directory, workUnitID: workUnitID)
         terminals.append(terminal)
         selectedTerminalID = terminal.id
         return terminal
@@ -172,6 +181,11 @@ final class DocumentStore: ObservableObject {
     /// Dismisses the close confirmation without closing anything.
     func cancelCloseTerminal() {
         pendingCloseTerminalID = nil
+    }
+
+    /// The terminal tabs nested under a review work unit, in open order.
+    func terminals(inWorkUnit id: WorkUnit.ID) -> [TerminalTab] {
+        terminals.filter { $0.workUnitID == id }
     }
 
     /// Updates a terminal tab's title as the running program reports it.

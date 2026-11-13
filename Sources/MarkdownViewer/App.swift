@@ -9,6 +9,7 @@ struct MarkdownViewerApp: App {
     @StateObject private var labels = LabelStore.shared
     @StateObject private var options = ViewOptions.shared
     @StateObject private var savedViews = SavedViewStore.shared
+    @StateObject private var workUnits = WorkUnitStore.shared
     @StateObject private var chat = ChatStore.shared
     @StateObject private var chatSettings = ChatSettings.shared
     @StateObject private var apiKeys = APIKeyStore.shared
@@ -23,6 +24,7 @@ struct MarkdownViewerApp: App {
                 .environmentObject(labels)
                 .environmentObject(options)
                 .environmentObject(savedViews)
+                .environmentObject(workUnits)
                 .environmentObject(chat)
                 .environmentObject(chatSettings)
                 .environmentObject(apiKeys)
@@ -62,7 +64,7 @@ struct MarkdownViewerApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 .disabled(!store.canCloseSelected)
-                Button("New Terminal") { store.openTerminalTab() }
+                Button("New Terminal") { openNewTerminal() }
                     .keyboardShortcut("t", modifiers: .command)
                 Divider()
                 Button("Save View…") { promptForNewView() }
@@ -106,6 +108,18 @@ struct MarkdownViewerApp: App {
             SettingsView()
                 .environmentObject(chatSettings)
                 .environmentObject(apiKeys)
+        }
+    }
+
+    /// Where ⌘T opens a terminal: in the active review work unit's worktree
+    /// when the user is working in one, otherwise the selected document's
+    /// folder (or home) — the same rule the sidebar's New Terminal button
+    /// applies.
+    private func openNewTerminal() {
+        if let unit = workUnits.activeUnit(forSelectedTerminal: store.selectedTerminal) {
+            store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
+        } else {
+            store.openTerminalTab()
         }
     }
 }
