@@ -62,7 +62,7 @@ struct PullRequestTests {
 
     @Test("parses a plain https pull request URL")
     func parsesHTTPSURL() throws {
-        let pr = #require(PullRequest.parse(url: "https://github.com/owner/repo/pull/123"))
+        let pr = try #require(PullRequest.parse(url: "https://github.com/owner/repo/pull/123"))
         #expect(pr.repository == "owner/repo")
         #expect(pr.number == 123)
         #expect(pr.title == "owner/repo #123")
@@ -90,6 +90,16 @@ struct PullRequestTests {
                        "https://example.com/owner/repo/pull/1",
                        "https://github.com/owner/repo/pull/notanumber",
                        "https://github.com/owner/repo/pull/0"] {
+            #expect(PullRequest.parse(url: string) == nil, "expected \(string) to be rejected")
+        }
+    }
+
+    @Test("rejects repository slugs that could escape the managed reviews folder")
+    func rejectsTraversalSlugs() {
+        for string in ["https://github.com/../../pull/1",
+                       "https://github.com/owner/../pull/1",
+                       "https://github.com/./repo/pull/1",
+                       "https://github.com/ow%2Fner/repo/pull/1"] {
             #expect(PullRequest.parse(url: string) == nil, "expected \(string) to be rejected")
         }
     }
@@ -226,9 +236,114 @@ struct WorkUnitStoreTests {
         #expect(fixture.store.selectedWorkUnitID == nil)
         #expect(!FileManager.default.fileExists(atPath: unit.worktreePath))
         #expect(!FileManager.default.fileExists(
-            at: unit.worktreeURL.deletingLastPathComponent().path))
+            atPath: unit.worktreeURL.deletingLastPathComponent().path))
 
         try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+    }
+
+    @Test("a failed worktree removal keeps the review so the failure stays visible")
+    func failedRemovalKeepsUnit() async throws {
+        let fixture = WorkUnitFixture()
+        let unit = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
+        fixture.store.select(unit.id)
+
+        // A read-only reviews folder makes the disk removal fail, the way a
+        // locked or busy worktree would.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555],
+                                              ofItemAtPath: fixture.reviewsDirectory.path)
+        do {
+            try fixture.store.delete(unit.id)
+            Issue.record("expected delete to throw")
+        } catch {
+            // The expected failure.
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: fixture.reviewsDirectory.path)
+
+        // The record and selection survive the failure, so the overview —
+        // and its error — stays on screen and the delete can be retried.
+        #expect(fixture.store.units.map(\.id) == [unit.id])
+        #expect(fixture.store.selectedWorkUnitID == unit.id)
+        #expect(FileManager.default.fileExists(atPath: unit.worktreePath))
+
+        // With the folder writable again, the retry succeeds.
+        try fixture.store.delete(unit.id)
+        #expect(fixture.store.units.isEmpty)
+        #expect(!FileManager.default.fileExists(
+            atPath: unit.worktreeURL.deletingLastPathComponent().path))
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+    }
+
+    @Test("delete removes the record but never touches paths outside the reviews folder")
+    func deleteStaysInsideManagedFolder() throws {
+        let fixture = WorkUnitFixture()
+        // Tampered records whose worktrees claim to live in a sibling of the
+        // managed reviews folder, and above it through a `..` fragment.
+        let base = fixture.reviewsDirectory.deletingLastPathComponent()
+        let sibling = base.appendingPathComponent("Reviews-other", isDirectory: true)
+            .appendingPathComponent("evil", isDirectory: true)
+            .appendingPathComponent("worktree", isDirectory: true)
+        let escaped = base.appendingPathComponent("escape-evil", isDirectory: true)
+            .appendingPathComponent("worktree", isDirectory: true)
+        for directory in [sibling, escaped] {
+            try FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)
+        }
+        let tampered = [
+            WorkUnit(prURL: URL(string: "https://github.com/owner/repo/pull/1")!,
+                     title: "owner/repo #1",
+                     worktreePath: sibling.path),
+            WorkUnit(prURL: URL(string: "https://github.com/owner/repo/pull/2")!,
+                     title: "owner/repo #2",
+                     worktreePath: fixture.reviewsDirectory.path
+                        + "/../escape-evil/worktree")
+        ]
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(tampered).write(to: fixture.storageURL)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory,
+                                  git: { _, _ in "" })
+        for unit in store.units {
+            try store.delete(unit.id)
+        }
+
+        // The records are gone, but neither outside directory was touched.
+        #expect(store.units.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: sibling.path))
+        #expect(FileManager.default.fileExists(atPath: escaped.path))
+
+        try? FileManager.default.removeItem(at: base)
+    }
+
+    @Test("an undecodable record file is rotated aside rather than overwritten")
+    func undecodableRecordsAreRotated() async throws {
+        let fixture = WorkUnitFixture()
+        try "{\"not\": \"valid\"}".data(using: .utf8)!.write(to: fixture.storageURL)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory,
+                                  git: { _, _ in "" })
+        #expect(store.units.isEmpty)
+
+        // Creating a review persists a fresh record file; the unreadable one
+        // must have been rotated aside, not destroyed.
+        _ = try await store.createReview(prURLString: "https://github.com/owner/repo/pull/12",
+                                         issueReference: nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.storageURL.path))
+        let directory = fixture.storageURL.deletingLastPathComponent().path
+        let rotated = ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+            .first { $0.hasPrefix("reviews-unreadable-") }
+        #expect(rotated != nil)
+        if let rotated {
+            let contents = try String(contentsOf: fixture.storageURL.deletingLastPathComponent()
+                .appendingPathComponent(rotated), encoding: .utf8)
+            #expect(contents.contains("not"))
+        }
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
     }
 
     @Test("unit records survive a new store reading the same folder")
@@ -270,7 +385,7 @@ struct WorkUnitStoreTests {
         #expect(fixture.store.selectedWorkUnitID == nil)
 
         fixture.store.select(unit.id)
-        fixture.store.deselect()
+        fixture.store.select(nil)
         #expect(fixture.store.selectedWorkUnitID == nil)
 
         try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
@@ -299,8 +414,8 @@ struct WorkUnitTerminalTests {
         #expect(nested.workUnitID == workUnitID)
         #expect(topLevel.workUnitID == nil)
         #expect(store.terminals.map(\.id) == [nested.id, topLevel.id])
-        #expect(store.terminals(inWorkUnit: workUnitID).map(\.id) == [nested.id])
-        #expect(store.terminals(inWorkUnit: UUID()).isEmpty)
+        #expect(store.terminals(workUnitID).map(\.id) == [nested.id])
+        #expect(store.terminals(UUID()).isEmpty)
     }
 
     @Test("closing one terminal in a work unit leaves the unit and its other terminals intact")
@@ -317,44 +432,103 @@ struct WorkUnitTerminalTests {
         store.closeTerminal(first.id)
 
         #expect(store.terminals.map(\.id) == [second.id])
-        #expect(store.terminals(inWorkUnit: workUnitID).map(\.id) == [second.id])
+        #expect(store.terminals(workUnitID).map(\.id) == [second.id])
         // The surviving terminal still belongs to the unit.
         #expect(second.workUnitID == workUnitID)
     }
 
     @Test("the active unit scopes new terminals to the selected work unit's worktree")
-    func activeUnitFollowsSelection() {
-        let reviewsDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("work-unit-tests-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("Reviews", isDirectory: true)
-        let workUnits = WorkUnitStore(reviewsDirectory: reviewsDirectory, git: { _, _ in "" })
+    func activeUnitFollowsSelection() async throws {
+        let fixture = WorkUnitFixture()
+        let unit = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
         let store = makeStore()
         defer { store.closeAll() }
 
-        let unit = WorkUnit(prURL: URL(string: "https://github.com/owner/repo/pull/1")!,
-                            title: "owner/repo #1",
-                            worktreePath: "/tmp/reviews/owner-repo-1/worktree")
-        workUnits.insertForTesting(unit)
-
-        // With nothing selected there is no active unit.
-        #expect(workUnits.activeUnit(forSelectedTerminal: nil) == nil)
+        // Start with nothing selected.
+        fixture.store.select(nil)
+        #expect(fixture.store.activeUnit(forSelectedTerminal: nil) == nil)
 
         // A selected terminal pulls in the unit it is nested in — the
         // nested world the user is working in.
         let terminal = store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
-        #expect(workUnits.activeUnit(forSelectedTerminal: terminal) == unit)
-        #expect(workUnits.unit(of: terminal) == unit)
+        #expect(fixture.store.activeUnit(forSelectedTerminal: terminal) == unit)
+        #expect(fixture.store.unit(of: terminal) == unit)
 
         // A selected unit wins even when a stray top-level terminal shows.
-        workUnits.select(unit.id)
+        fixture.store.select(unit.id)
         let stray = store.openTerminalTab()
-        #expect(workUnits.activeUnit(forSelectedTerminal: stray) == unit)
-        #expect(workUnits.unit(of: stray) == nil)
+        #expect(fixture.store.activeUnit(forSelectedTerminal: stray) == unit)
+        #expect(fixture.store.unit(of: stray) == nil)
 
         // Unknown selection ids are ignored, like the other stores.
-        workUnits.select(UUID())
-        #expect(workUnits.selectedWorkUnitID == unit.id)
+        fixture.store.select(UUID())
+        #expect(fixture.store.selectedWorkUnitID == unit.id)
 
-        try? FileManager.default.removeItem(at: reviewsDirectory)
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+    }
+}
+
+@Suite("Detail-column selection precedence")
+@MainActor
+struct SelectionPrecedenceTests {
+
+    /// Makes a temporary Markdown file the tests can open.
+    private func makeTempFile(_ contents: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("selection-tests-\(UUID().uuidString).md")
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// An isolated document store, mirroring the fixture pattern the other
+    /// suites use so no test touches the shared singleton.
+    private func makeStore() -> DocumentStore {
+        let scratchLabels = FileManager.default.temporaryDirectory
+            .appendingPathComponent("selection-tests-labels-\(UUID().uuidString).json")
+        return DocumentStore(labels: LabelStore(storageURL: scratchLabels))
+    }
+
+    @Test("selecting a document or terminal through any path clears the work unit selection")
+    func documentAndTerminalSelectionClearUnit() async throws {
+        let fixture = WorkUnitFixture()
+        let unit = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
+        let store = makeStore()
+        // Keep the coordinator alive for the whole test: its subscriptions
+        // are what enforces the rule under test.
+        let coordinator = SelectionCoordinator(store: store, workUnits: fixture.store)
+        let documentURL = try makeTempFile("# Hello")
+        defer {
+            store.closeAll()
+            try? FileManager.default.removeItem(at: documentURL)
+            try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+        }
+
+        withExtendedLifetime(coordinator) {
+            // The wizard's unit is selected; its overview owns the detail
+            // column.
+            #expect(fixture.store.selectedWorkUnitID == unit.id)
+
+            // Opening a document — the path File > Open, drag-and-drop and
+            // an "Open With" from the Finder all take, none of which go
+            // through the sidebar's selection binding — hands the column to
+            // the document instead of leaving it stuck on the review
+            // overview.
+            store.open(url: documentURL)
+
+            #expect(store.selectedDocument?.url.path == documentURL.path)
+            #expect(fixture.store.selectedWorkUnitID == nil)
+
+            // Re-selecting the unit and then opening a terminal (the ⌘T
+            // path) hands the column to the terminal the same way.
+            fixture.store.select(unit.id)
+            let terminal = store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
+
+            #expect(store.selectedTerminal?.id == terminal.id)
+            #expect(fixture.store.selectedWorkUnitID == nil)
+        }
     }
 }

@@ -151,15 +151,18 @@ struct ReviewOverviewView: View {
         NSWorkspace.shared.open(unit.prURL)
     }
 
-    /// Deletes the review: its terminals close first (the confirmation above
-    /// says they will), then the record and the worktree go.
+    /// Deletes the review: the record and the worktree go first, and its
+    /// terminals close only once the removal has succeeded (the confirmation
+    /// above says they will) — a failed removal keeps the review in place
+    /// and selected, so the error below stays on screen and the delete can
+    /// be retried.
     private func delete() {
         deleteError = nil
-        for terminal in store.terminals where terminal.workUnitID == unit.id {
-            store.closeTerminal(terminal.id)
-        }
         do {
             try workUnits.delete(unit.id)
+            for terminal in store.terminals where terminal.workUnitID == unit.id {
+                store.closeTerminal(terminal.id)
+            }
         } catch {
             deleteError = "The review's files could not be removed: \(error.localizedDescription)"
         }

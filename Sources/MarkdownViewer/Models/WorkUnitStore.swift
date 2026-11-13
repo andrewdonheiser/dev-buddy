@@ -14,7 +14,7 @@ enum ReviewError: LocalizedError, Equatable {
         case .invalidPullRequestURL:
             "That is not a GitHub pull request URL. Use the PR's own address, e.g. https://github.com/owner/repo/pull/123."
         case .worktreeCreationFailed(let message):
-            "The pull request could not be checked out into a worktree. \(message)"
+            "The pull request could not be checked out into a worktree. \(message) Check the URL, your network connection, and that you have access to the repository, then try again."
         }
     }
 }
@@ -32,8 +32,9 @@ final class WorkUnitStore: ObservableObject {
     /// The work unit selected in the sidebar, if any. A selected unit shows
     /// its review overview in the detail column (a selected terminal still
     /// wins the column, exactly as it does over the selected document) and
-    /// scopes new terminals to its worktree. Selecting any other tab clears
-    /// it, mirroring how selecting a document clears the terminal selection.
+    /// scopes new terminals to its worktree. Selecting a document or
+    /// terminal clears it — `SelectionCoordinator` watches every selection
+    /// path, not just sidebar clicks.
     @Published private(set) var selectedWorkUnitID: WorkUnit.ID?
 
     /// Runs one git command — arguments plus the directory to run it in —
@@ -159,12 +160,6 @@ final class WorkUnitStore: ObservableObject {
         selectedWorkUnitID = id
     }
 
-    /// Clears the work unit selection — called when another kind of tab is
-    /// selected, the way selecting a document clears the terminal selection.
-    func deselect() {
-        selectedWorkUnitID = nil
-    }
-
     /// The work unit new terminals belong to: the selected one, or when a
     /// terminal is showing, the unit that terminal is nested in — the nested
     /// world the user is working in.
@@ -176,12 +171,6 @@ final class WorkUnitStore: ObservableObject {
     func unit(of terminal: TerminalTab) -> WorkUnit? {
         guard let id = terminal.workUnitID else { return nil }
         return units.first { $0.id == id }
-    }
-
-    /// Inserts an already-created unit without touching git — the seam
-    /// tests use to build a store with units of their own making.
-    func insertForTesting(_ unit: WorkUnit) {
-        units.append(unit)
     }
 
     // MARK: - Archiving and deleting
@@ -209,16 +198,27 @@ final class WorkUnitStore: ObservableObject {
 
     /// Deletes the review's record and its whole unit directory — clone and
     /// worktree — from disk. This is the only path that removes a worktree.
+    /// The disk removal happens first and throws on failure with the record
+    /// and selection intact, so the failure stays visible in the review's
+    /// overview and the delete can be retried; the unit's terminals are the
+    /// caller's to close once the removal has succeeded.
     func delete(_ id: WorkUnit.ID) throws {
         guard let index = units.firstIndex(where: { $0.id == id }) else { return }
-        let unit = units.remove(at: index)
+        let unit = units[index]
+        // Only ever remove directories the store manages, whatever the
+        // record happens to contain: standardized paths with a separator
+        // boundary, so sibling folders and `..` fragments in a tampered
+        // record cannot pass. A directory that is already gone still lets
+        // the record be deleted.
+        let managedRoot = reviewsDirectory.standardizedFileURL.path + "/"
+        let unitDirectory = unit.worktreeURL.deletingLastPathComponent().standardizedFileURL
+        if unitDirectory.path.hasPrefix(managedRoot),
+           fileManager.fileExists(atPath: unitDirectory.path) {
+            try fileManager.removeItem(at: unitDirectory)
+        }
+        units.remove(at: index)
         if selectedWorkUnitID == id { selectedWorkUnitID = nil }
         persist()
-        // Only ever remove directories the store manages, whatever the
-        // record happens to contain.
-        let unitDirectory = unit.worktreeURL.deletingLastPathComponent()
-        guard unitDirectory.path.hasPrefix(reviewsDirectory.path) else { return }
-        try fileManager.removeItem(at: unitDirectory)
     }
 
     // MARK: - Persistence
@@ -240,6 +240,18 @@ final class WorkUnitStore: ObservableObject {
         guard let data = try? Data(contentsOf: url) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([WorkUnit].self, from: data)) ?? []
+        do {
+            return try decoder.decode([WorkUnit].self, from: data)
+        } catch {
+            // A record file that cannot be decoded is rotated aside rather
+            // than discarded: starting from an empty store would let the
+            // next persist() overwrite the file and permanently destroy
+            // every review record while the worktrees live on. The rotated
+            // copy stays next to it for manual recovery.
+            let rotated = url.deletingLastPathComponent()
+                .appendingPathComponent("reviews-unreadable-\(Int(Date().timeIntervalSince1970)).json")
+            try? FileManager.default.moveItem(at: url, to: rotated)
+            return []
+        }
     }
 }

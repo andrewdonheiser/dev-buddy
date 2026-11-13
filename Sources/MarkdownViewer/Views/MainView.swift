@@ -56,6 +56,8 @@ struct MainView: View {
         // Detail-column precedence: a selected terminal keeps the column
         // (over the surviving document selection, as before), then the
         // selected review work unit's overview, then the selected document.
+        // `SelectionCoordinator` keeps this coherent: selecting a document
+        // or terminal through any path clears the work-unit selection.
         if let terminal = store.selectedTerminal {
             // A terminal tab keeps the chat panel on screen, bound to the
             // selected document when one is open.

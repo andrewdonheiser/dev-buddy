@@ -60,15 +60,12 @@ struct ReviewWizardView: View {
         .frame(width: 440)
     }
 
-    /// Validates the input, creates the work unit, then opens the PR in the
-    /// browser and a terminal in its worktree.
+    /// Creates the work unit — the store validates the PR URL and throws a
+    /// distinct error when it is not a GitHub pull request URL — then opens
+    /// the PR in the browser and a terminal in its worktree.
     @MainActor
     private func create() async {
         errorMessage = nil
-        guard PullRequest.parse(url: prURLString) != nil else {
-            errorMessage = ReviewError.invalidPullRequestURL.errorDescription
-            return
-        }
         isCreating = true
         do {
             let unit = try await workUnits.createReview(prURLString: prURLString,
@@ -80,8 +77,15 @@ struct ReviewWizardView: View {
             store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
             dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            showError(error.localizedDescription)
         }
         isCreating = false
+    }
+
+    /// Shows the failure in the sheet and announces it, so assistive
+    /// technology reports the error the sighted user reads.
+    private func showError(_ message: String) {
+        errorMessage = message
+        AccessibilityNotification.Announcement(message).post()
     }
 }

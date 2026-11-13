@@ -73,5 +73,9 @@ struct SidebarTerminalRowTests {
         #expect(TabSidebarView.sectionTitle(documentCount: 2, terminalCount: 0) == "Open Tabs")
         #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 3) == "Open Tabs")
         #expect(TabSidebarView.sectionTitle(documentCount: 1, terminalCount: 2) == "Open Tabs")
+        // Review work units render in the same section, so reviews alone —
+        // the normal state after a relaunch — must not read "No Files".
+        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 0, workUnitCount: 1) == "Open Tabs")
+        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 0, workUnitCount: 0) == "No Files")
     }
 }

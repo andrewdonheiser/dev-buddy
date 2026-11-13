@@ -64,7 +64,7 @@ struct MarkdownViewerApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 .disabled(!store.canCloseSelected)
-                Button("New Terminal") { openNewTerminal() }
+                Button("New Terminal") { store.openTerminalInActiveWorkUnit(workUnits: workUnits) }
                     .keyboardShortcut("t", modifiers: .command)
                 Divider()
                 Button("Save View…") { promptForNewView() }
@@ -110,27 +110,22 @@ struct MarkdownViewerApp: App {
                 .environmentObject(apiKeys)
         }
     }
-
-    /// Where ⌘T opens a terminal: in the active review work unit's worktree
-    /// when the user is working in one, otherwise the selected document's
-    /// folder (or home) — the same rule the sidebar's New Terminal button
-    /// applies.
-    private func openNewTerminal() {
-        if let unit = workUnits.activeUnit(forSelectedTerminal: store.selectedTerminal) {
-            store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
-        } else {
-            store.openTerminalTab()
-        }
-    }
 }
 
 /// Handles files opened from Finder ("Open With") before the UI is ready, and
 /// ensures the app behaves as a regular foreground app when run as a bundle.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Wires the cross-store selection rule (see `SelectionCoordinator`)
+    /// for the app's lifetime.
+    private var selection: SelectionCoordinator?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        selection = SelectionCoordinator(store: DocumentStore.shared,
+                                         workUnits: WorkUnitStore.shared)
 
         let fileArguments = CommandLine.arguments
             .dropFirst()
