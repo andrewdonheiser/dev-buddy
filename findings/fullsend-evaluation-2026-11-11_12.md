@@ -4,11 +4,83 @@
 its full triage → code → review → fix loop end-to-end on this repository, using GLM 5.3 at
 high effort via the EnMaaS inference gateway.
 
-**Evaluation window:** 2026-11-11 ~16:00 UTC → 2026-11-12 ~17:30 UTC
+**Evaluation window:** 2026-11-11 ~16:00 UTC → ongoing (document last updated 2026-11-13
+~15:00 UTC; the core loop evaluation completed ~17:30 on day 2, follow-on observations
+continue — see timeline and recommendation 7)
 **Fullsend version:** v0.55.0 · per-repo install mode · `pi` runtime
-**Status at time of writing:** complete. PR #3 merged by the human after the loop
-self-terminated at its iteration cap; compile + full test suite verified locally;
-remaining lows triaged into issue #5; retro agent ran on the merge.
+**Status at time of writing:** core evaluation complete (PR #3 merged after the loop
+self-terminated at its iteration cap); follow-on phases: CI added and green (PR #11),
+auto-promoted PRs #9/#10, workflows-permission case study (F13). **Defaults deliberately
+left on for continued observation** — see recommendation 7.
+
+---
+
+## TL;DR — issues found
+
+**High severity**
+
+- **The review↔fix loop doesn't converge on its own** (F1). Findings count stays flat
+  (~14) while severity asymptotes to lows; the iteration cap (5 bot rounds) is the only
+  terminator, and it fired. Sharper edge found later: **`/fs-fix` instructions are
+  per-run** — a scoped instruction ("don't fix lows") is followed exactly by its run,
+  but the next bot-triggered round starts with the default "fix everything" mandate and
+  no memory of it.
+- **Scoped instructions race a bot round the human cannot see coming** (F14): the first
+  fix after a review verdict is bot-triggered within ~a minute — before a human can
+  even read the review. A late instruction doesn't just fail to apply, it collides
+  retroactively: the next run "complied" by reverting fixes the earlier un-instructed
+  round had already made.
+- **Setup failures are silent** (F2): harness defaults resolve to an unconfigured
+  provider; nothing warns until runs fail confusingly.
+- **No CI + Linux-only sandboxes = agents iterate blind** (F8/F11): the PR #3 head
+  never compiled, through six fix rounds; nothing in the loop could run `swift build`.
+  Remedied mid-evaluation: after CI went live, agent fix reports began referencing CI
+  status as ground truth within ~90 minutes. **But red CI fuels the loop instead of
+  stopping it** (F15): the fix agent still can't run Swift, so it responds to red CI
+  with blind "fixes" that the next CI run falsifies — CI gates the human's merge, not
+  the loop's ignition.
+
+**Medium severity**
+
+- **Failed pushes destroy the agent's work product** (F6) — ephemeral runner, no
+  salvage. Compound case (F13): the code agent burned a full 7-minute run on a
+  `.github/workflows/` push its app can never make (both triage's warning and its own
+  "any path" instruction notwithstanding), then lost everything on rejection.
+- **Default-on autonomy chains** (F12): triaged `bug`/`documentation`/`performance`
+  issues auto-promote to the code agent; retro runs on every merge. Three unrequested
+  agent runs observed in one evening.
+- **`blocked` labels never expire on their own** (F16): triage correctly blocked
+  issue #4 on PR #3; the PR merged 19 hours later and the issue sat labeled `blocked`
+  — fully specified, ready to build — until a human happened to re-triage. The
+  automation is all ignition, no resumption: everything starts without you, but
+  nothing resumes when a blocker clears.
+- **Review output is fragmented and easy to miss** (F17): each CHANGES_REQUESTED
+  verdict is a ~120-character review stub with findings scattered as inline diff
+  comments; only round 1 got a readable summary. Prominent fix-agent reports answer
+  reviews the human has to hunt for — the loop's driver is its least legible
+  artifact, while the agents get a structured, parseable findings channel.
+- Scaffold-branch config doesn't reliably survive into `main` (F3); missing GitHub App
+  installation is a silent no-op (F4); rulesets targeting more than the default branch
+  block agent pushes entirely (F5).
+
+**Low / informational**
+
+- `/fs-fix` with a leading space silently no-ops (F7); phantom queued run (F9); every
+  bot comment spawns a skipped workflow run (F10).
+
+**What worked well**
+
+- Scoped `/fs-fix` instructions are followed precisely, within their run.
+- Triage: cheap ($0.07–0.12), verifies claims against the code, decomposes collectors
+  into single-purpose issues, corrects errors in the human's filed text.
+- Retro: from workflow data alone, independently reconstructed the PR #3 saga and filed
+  the exact CI remedy this document's F8/F11 prescribe.
+- The iteration cap, `/fs-fix-stop`, and the security boundaries (workflows permission,
+  rulesets) all worked exactly as documented.
+
+**Bottom line:** a capable but default-agentic pipeline. The agents are good; the
+defaults assume more autonomy and more convergence than a solo repo wants. The tuning
+recipe is in recommendation 7; the playbook for living with defaults is recommendation 1.
 
 ---
 
@@ -85,9 +157,37 @@ All times UTC. Run IDs and SHAs are given as evidence pointers.
 | 19:43 | Human merges **PR #10** (issue #7 polish batch). Verified locally afterward: `swift build` clean on `main`; `swift test` unverified (no CI exists yet). |
 | 19:44 | Human runs `/fs-code` on **issue #8** (the CI proposal). The code agent completes ~7 min of correct work, then the **push is rejected: the coder app lacks `workflows` write permission** (F13). The entire work product is lost with the ephemeral runner. |
 | 19:58 | A second `/fs-code` (posted on issue #6, where PR #9 already exists) runs and correctly produces **no PR** — "agent determined no changes needed." No duplicate branch was created. |
+| 20:04 | Human pushes `ci.yaml` by hand (the file the agent could not push, F13) plus this findings document, as **PR #11** — via PR because the repo's own ruleset correctly blocks direct pushes to `main`. |
+| 20:15 | **First CI run ever — fails.** SwiftTerm 1.99.3 requires `swift-tools-version: 6.2`; the runner image's default Xcode was older. Diagnosed from the failure log and fixed in two minutes (macos-26 image, select newest Xcode) — versus PR #3's uncompilable code surviving six fix iterations because nothing could check it. The fix for F8/F11 failed safely on its first run and was corrected immediately: the argument for CI, demonstrated by CI. |
+| 20:17 | **CI green: 135/135 tests** across 17 suites (test count up from 51 at PR #3 — the auto-coded PRs #9/#10 added ~84 tests). First machine-verified `swift test` in the repo's history. |
+| 20:43 | Review agent reviews **PR #11** (its first review with CI available): CHANGES_REQUESTED — one legitimate medium (no `permissions:` block on the CI workflow; least-privilege), plus process nits including correctly flagging that CI + findings-doc in one PR violates the repo's own one-feature convention. No fix loop starts: the fix bot cannot push to branches touching `.github/` (same F13 wall). |
+| 21:04 | **Human merges PR #11.** Issue #8 auto-closes. First CI run on `main` itself starts. **Retro agent auto-fires on the merge** — the third autonomous edge firing of the evening (auto-code #6, auto-code #7, auto-retro), observed and priced (~$0.15, ~25 min). |
+| 21:10 | Human opens **PR #12** (two-line least-privilege `permissions:` fix from the review). **Evaluation decision recorded:** the pipeline-tuning configuration worked out this evening (see recommendation 7) is deliberately **not applied** — the evaluation is of fullsend's defaults, and disabling default behaviors mid-evaluation would contaminate it. Every subsequent autonomous firing is data, not noise. |
+| ~21:30 | Human posts `/fs-fix merge main into this branch and resolve the conflicts…` on PR #9 (the conflict from PR #10). The fix agent merges `main` (`a76376c`, carrying PRs #10 and #11) and resolves the test-file conflict, preserving both sides. **PR #9 conflict resolved.** |
+| 21:41 | The merge commit auto-triggers review round 5 on PR #9: CHANGES_REQUESTED, 5 lows (the same carried ones). The push also triggers the **first CI run on a PR branch** — green. |
+| ~22:00 | **Instruction-scope discovery (F1 extension):** the review verdict auto-triggers fix iteration 5 (**bot-triggered, no instruction**), which "Addressed all 5 open findings" — all lows — directly contradicting the human's 19:41 "do not fix any low issues" instruction. That instruction was obeyed exactly by its own run (iteration 4 made no changes and filed the lows under "Disagreed"), but **`/fs-fix` instructions are per-run**: the next bot-triggered round starts fresh with the default "fix everything flagged" mandate. Only the code persists across rounds, not the guidance. |
+| 22:11 | Review round 6 on PR #9: CHANGES_REQUESTED again. Loop active. Notably, iteration 5's report references CI: *"the macOS CI job (build-and-test) is green on the prior head and will re-verify this commit on push"* — **the first agent report in the evaluation to treat CI as ground truth**, ~90 minutes after CI went live. The retro's central validation criterion is met (see agent-quality observations). |
 
 Alongside: issue #4 ("support pr review workflow") was filed and triaged successfully
 during day 1 evening — confirms different issues run independently/in parallel.
+
+---
+
+### Day 3 — 2026-11-13: PR #14 and the instruction race
+
+| Time (UTC) | Event |
+|---|---|
+| 22:57 (day 2) | Human merges **PR #9**; issue #6 auto-closes. Retro auto-fires on the merge (observation #3). |
+| 22:58 (day 2) | Human merges **PR #12** (CI permissions fix). Retro auto-fires again (observation #4) — its write-up correctly reconstructs the whole chain: human-authored PR implementing the review's medium finding, itself needed because the coder app can't push workflow files (F13). |
+| morning | Issue #4 re-triaged: `blocked` dropped (both prerequisites — PR #3 and #2 — had been satisfied since day 2, ~19 hours earlier; nothing re-fires triage when a blocker closes, so the label was stale until the human prompted — **F16**). Labeled `triaged`. Human runs `/fs-code`. |
+| ~13:08 | **Coder opens PR #14**: the PR-review workflow with worktree-backed work units (~1,341 lines, additive, well-structured per the risk assessment). First CI run: **failure**. |
+| 13:36 | Review round 1: CHANGES_REQUESTED — 16 findings (1 high: cross-store selection desync; 5 mediums; 10 lows). |
+| 13:37 | **Fix iteration 1 fires (bot-triggered) — 60 seconds after the review verdict.** No instruction exists yet; default mandate applies. |
+| 13:58 | Iteration 1 completes (~21 min): "Addressed all 16 review findings and the failing project CI job with one commit" — including all ten lows. CI on the new commit: **failure** again. |
+| 14:01 | Human, having read the review, posts `/fs-fix do not fix low priority or nits` — **25 minutes after the bot round started, 3 minutes after it finished.** **F14: the instruction was structurally late.** |
+| 14:02 | Fix iteration 2 (human-triggered) starts. |
+| 14:17 | Iteration 2 completes — **complies with the instruction by reverting the low/nit fixes iteration 1 had already applied**, keeping the high and medium fixes. Also claims to fix the CI failure ("fixture closure captured self before initialization"). CI on the new commit: **failure again** — 4 behavioral test failures in `WorkUnitStoreTests` (worktree paths never created on the runner), a different cause than the compile error claimed fixed. **F15: red CI the agent cannot reproduce is loop fuel.** |
+| 14:19 | Review round starts on the new head. Loop active; CI red on all three commits. |
 
 ---
 
@@ -99,7 +199,10 @@ Severity here reflects impact on the evaluation, not fullsend's own severity sca
 
 (Numbered by discovery order; F11 was found on day 2 during local build verification,
 F12 at wrap-up when triage auto-promoted issue #6 to code, F13 from the workflows-
-permission push rejection on the `/fs-code` run against issue #8.)
+permission push rejection on the `/fs-code` run against issue #8, F14/F15 on day 3
+from the PR #14 fix loop — the instruction race and red-CI churn respectively — F16
+from issue #4's stale `blocked` label, and F17 from reading PR #14's review trail on
+GitHub; the last three are day 3.)
 
 **F1 — The review↔fix auto-loop does not converge on its own (high, partially by design).**
 Once a review submits CHANGES_REQUESTED, fix runs automatically (default behavior for PRs
@@ -108,6 +211,31 @@ round resolves most findings but writes new code, and the reviewer (at high effo
 reliably finds new low-severity findings in it. Observed: severity converges (high →
 mediums → 1 medium), count does not (≈14 findings every round; round 5's lows were
 mostly nitpicks on code fix-round-4 itself introduced).
+
+**Extension (day 2, PR #9): `/fs-fix` instructions are per-run, not per-PR.** The human
+posted a scoped instruction ("do not fix any low issues"); the human-triggered run it
+accompanied obeyed it exactly — made no changes, filed both open lows under "Disagreed"
+citing the instruction. Hours later the human posted a second instruction (merge-main to
+resolve a conflict); that run obeyed *it*. But the conflict-resolution push triggered a
+review, the verdict auto-triggered the next fix round **with no instruction**, and it
+"Addressed all 5 open findings" — all lows — exactly what the earlier instruction had
+forbidden. Each fix run is a fresh agent with only the review body plus *its own*
+instruction; there is no memory of prior runs' mandates, and bot-triggered rounds carry
+no instruction at all, so they default to "fix everything flagged." Consequence: command
+discipline cannot shape the loop's trajectory — only `/fs-fix-stop`, the iteration cap,
+or merging bounds it. (Corollary: any human guidance must be re-stated in every
+human-triggered run, and nothing can reach bot-triggered runs at all.)
+
+**Refinement (day 3, PR #14): agents can discover prior instructions in the PR comment
+history and adopt them as standing guidance.** Fix iterations 4 and 5 (bot-triggered,
+no instruction) both cited the human's earlier "do not fix low priority or nits"
+comment as "the maintainer's standing instruction on this PR," and iteration 5 made no
+changes on that basis. So the mandate channel is per-run, but the agent *can* choose to
+read the comment history — here correctly, and to good effect: the instruction wasn't
+wasted, it arrived too late for round 1 (F14) and took effect once an agent went
+looking. Unreliable by design, though: nothing guarantees later runs will notice, read,
+or follow prior instructions — the observed compliance was the model's initiative, not
+a mechanism.
 
 The loop is bounded, per the official Fix agent docs: **bot-triggered fixes are capped
 at 5 per PR** (configurable — the runner default surfaced in the logs as
@@ -298,6 +426,141 @@ F8/F11's: once the human adds `ci.yaml` manually (done locally after this findin
 2026-11-12), the class of "please change CI/workflows" requests has a concrete human
 path and the agent path can simply be declined.
 
+**F14 — Scoped instructions race a bot round the human cannot see coming (high).**
+
+*Case: PR #14 (issue #4's implementation), 2026-11-13 13:36–14:17 UTC.*
+
+The review posted its CHANGES_REQUESTED verdict (16 findings) at 13:36; the fix agent
+fired at 13:37 — **60 seconds later**, bot-triggered, with the default "fix everything
+flagged" mandate. The human read the review and posted the scoped instruction
+(`/fs-fix do not fix low priority or nits`) at 14:01 — 25 minutes after the bot round
+started, 3 minutes after it finished. The instruction was structurally late, and
+**nothing told the human that**:
+
+- No signal accompanies a review verdict that a fix round has already ignited. The
+  only artifact is the fix agent's own status comment, which posts when the run
+  starts — visible only if you're watching the PR in real time.
+- The race is unwinnable by design: reading a 16-finding review takes longer than the
+  ~1-minute window between verdict and bot-fix ignition. Any scoped instruction a
+  human posts after *reading* the review arrives after round 1 has already run.
+
+The late instruction didn't just fail to apply — it **collided retroactively**.
+Iteration 2, obeying "do not fix lows," found that iteration 1 had already fixed them;
+its way of complying was to *revert* the ten low/nit fixes in a new commit while
+keeping the high and mediums. Net effect: two commits of churn re-litigating the same
+findings, and a PR whose diff now contains fix-then-unfix of the same code. A
+compliant instruction produced *more* churn than no instruction at all.
+
+This compounds F1's per-run scope finding: not only do instructions fail to persist
+across rounds, they cannot reach round 1 at all, and when they arrive late they can
+invert prior rounds' work. **Consequence for the playbook (recommendation 1): scoped
+instructions can shape rounds ≥2 only, and only if the human wins a race against a bot
+that fires within the minute.** The reliable levers remain `/fs-fix-stop` (which does
+pre-empt, since it gates ignition) and merging.
+
+*Remedies fullsend could adopt:* post an igniting-fix notification on the review
+verdict itself; hold bot-fix ignition for a configurable grace period after
+CHANGES_REQUESTED (even 10 minutes would let a human scope the round); or let the
+`/fs-fix` instruction attach to the PR (sticky scope) rather than the run.
+
+**F15 — Red CI the sandbox cannot reproduce fuels the loop instead of stopping it
+(high).**
+
+*Case: PR #14, three commits, three red CI runs, 2026-11-13.*
+
+This is the F8/F11 blindness recurring *with* CI present — and demonstrating that CI
+alone doesn't close the loop. CI worked exactly as intended on PR #14: every push was
+built and tested, and it caught a real problem the agent's reports would never have
+surfaced — 4 behavioral test failures in `WorkUnitStoreTests` (worktree directories
+never created on a clean runner), with precise signatures (named tests, exact
+expectation failures, file:line).
+
+But the fix agent's Linux sandbox still cannot run `swift build`/`swift test`, so it
+responds to red CI **blind**: iteration 2's report claims "also fixed the pr-related
+CI compile failure … (fixture closure captured self before initialization)" — a
+plausible-sounding diagnosis the next CI run falsified (the failure was behavioral,
+not a compile error, and persisted identically). The observed cycle:
+
+> review sees red CI → CHANGES_REQUESTED → fix fires → agent cannot reproduce the
+> failure → pushes a blind "fix" with a confident wrong diagnosis → CI red again →
+> repeat
+
+CI gates the **human's** merge decision but not the **loop's** ignition. Red CI — the
+strongest possible signal that a human should look — instead becomes another finding
+for the auto-fix loop to churn against, with each round spending real money
+(~$0.10–0.15) on changes that cannot be verified by their author. Without
+intervention the terminator is the same iteration cap as F1, ~5 rounds later.
+
+*What would break the cycle:* red CI suppressing bot-fix ignition (routing the PR to
+`needs-human` instead — the failure is, by definition, not fixable-blind); or a
+sandbox that can run the project's tests (macOS runners for macOS projects, or
+remote-verification against CI as part of the fix loop rather than after it). Absent
+either, the practical rule for the human: **when CI is red on a bot PR, the next fix
+round is guaranteed to be a guess — stop it (`/fs-fix-stop`) or diagnose it yourself.**
+
+**F16 — `blocked` is a point-in-time snapshot; nothing re-triages when a blocker
+resolves (medium).**
+
+*Case: issue #4 ("support pr review workflow"), 2026-11-11 → 2026-11-13.*
+
+Triage (day 1, 19:34 UTC) blocked issue #4 on the terminal foundation — PR #3 /
+issue #2 — with a correct, well-reasoned dependency analysis, and over three triage
+rounds answered every design question the issue raised (nested tab-tree reused from
+the reverted `bfd6f04`, workspace functionality excluded, worktrees kept until
+explicitly deleted). PR #3 merged day 2 at ~17:15; issue #2 closed. Issue #4 then sat
+labeled `blocked` — fully specified, prerequisites satisfied — for **~19 hours**,
+until the human happened to ask why it wasn't moving and re-ran `/fs-triage` (day 3
+morning), which dropped the label and marked it `triaged`. The `/fs-code` run that
+produced PR #14 followed within hours.
+
+What failed: the dependency was recorded as a **label plus prose**, not a live link.
+Triage's own comment even lists the blocking issues/PRs by URL — GitHub has the
+identities — but nothing subscribes to their resolution. No scheduled sweep over
+`blocked` issues, no event hook on blocker closure, no expiry.
+
+Why it matters — the asymmetry: **fullsend's automation is all ignition, no
+resumption.** Everything that can start without the human does (auto-code F12,
+auto-fix F1, auto-retro on merge), but the one transition that requires remembering —
+"the prerequisite landed; resume the blocked work" — is entirely on the human. In a
+solo repo the stall is eventually noticed; in a team it is invisible indefinitely.
+It inverts the product's promise: the pipeline moves issues forward automatically,
+except when it silently doesn't.
+
+*Cheap remedies:* a scheduled triage pass over `blocked` issues checking blocker
+state; or wiring blocker closure (issue closed / PR merged) to a re-triage run —
+the same event plumbing that already auto-fires retro on merges.
+
+**F17 — Review output is fragmented and low-visibility; the loop's driver is its
+least legible artifact (medium).**
+
+*Case: PR #14, four review rounds, 2026-11-13.*
+
+Each CHANGES_REQUESTED verdict is recorded as a formal GitHub review whose body is a
+**~120-character stub**; the findings themselves are attached as **inline comments on
+specific diff lines** (visible in the Files changed tab, or as collapsed "commented on
+line N" blocks in the conversation timeline); and the machine-readable findings blob
+rides in a hidden HTML comment (`<!-- fullsend:review-findings-v2:… -->`) that the fix
+agent parses. Only **round 1** additionally posted a long-form "## Review / ###
+Findings" summary comment — rounds 2–4 posted none.
+
+Consequence: on the PR conversation, five prominent fix-agent reports ("### 🔧 Fix
+agent — iteration N…") each answer reviews the human can barely find. The question
+that drives every human decision in the loop — *what did the reviewer actually object
+to?* — requires visiting Files changed and reading scattered inline annotations. The
+asymmetry is the point: **agents get a structured, parseable channel (the findings
+blob); humans get the scraps.** The review is the loop's ignition signal, its
+severity ladder, and the de facto gate on merging — and it is the least visible
+artifact the pipeline produces.
+
+What fullsend gets right: inline line-anchored comments are the idiomatic GitHub
+review mechanism — more actionable than a wall of prose — and the round-1 summary is
+well-written (severity-grouped, file:line references).
+
+*Remedies:* post the summary comment every round, not just the first, with a verdict
+line and counts by severity; or carry the summary in the review body itself (GitHub
+renders it in the timeline entry); or have each fix report link the review it
+answers.
+
 **F9 — Phantom queued run (low, GitHub-side).**
 Run 43095470483 hung in `queued` with zero jobs for 12+ hours; cancel endpoint reported it
 "completed", delete returned 403. GitHub infrastructure inconsistency, not fullsend's
@@ -327,6 +590,13 @@ obscured real signal (e.g., the F7 skip) during debugging.
 - **Fix:** effective at resolving targeted findings (12/14 in round 1), but each round
   introduced new low-severity material for the next review (driver of F1), and round 3
   introduced a compile error by following the reviewer's bad remediation (F11).
+  Compliance with scoped instructions is precise but per-run (F1 extension). **First
+  post-CI data point (PR #9, iteration 5, ~90 minutes after CI went live): the fix
+  report references CI as ground truth** — "the macOS CI job (build-and-test) is green
+  on the prior head and will re-verify this commit on push" — while still correctly
+  disclosing that the sandbox itself cannot run Swift. The retro's central validation
+  criterion (agents reference CI status instead of only "tests could not run") was met
+  on the first fix round that had a CI to reference.
 - **Retro:** excellent, and the strongest validation of the evaluation. From workflow
   data alone (no access to this findings document), it reconstructed the entire PR #3
   saga accurately — 7 review rounds, 6 fix iterations, every "tests could not run"
@@ -369,6 +639,11 @@ cost (F1).
      curve — escalation fires rounds sooner.
    For reference, the optimal sequence here would have been: scoped fix for the two
    mediums → `/fs-fix-stop` → merge: **2 fix rounds instead of 6**.
+   *Caveat from day 3 (F14): scoped instructions can only shape rounds ≥2 — the first
+   fix after a review verdict is bot-triggered within ~a minute, before a human can
+   read the review, and a late instruction makes the next run revert round 1's work to
+   comply. If the scoping matters, post it knowing round 1 is already lost — or skip
+   straight to `/fs-fix-stop` and re-scope manually.*
 2. **Add Swift CI** (`swift build` + `swift test` on `pull_request`, macOS runner) before
    the next agent-authored PR. This is the single highest-leverage change — F8 and F11
    (five fix rounds iterating on code that never compiled) are both direct consequences
@@ -384,28 +659,62 @@ cost (F1).
 6. For future evaluations: capture the `/fs-fix` command format requirement (no leading
    space) and the phantom-run workaround (F7, F9) in runbooks so they don't cost debugging
    time again.
+7. **"Calm repo" configuration — worked out, verified against the docs, deliberately
+   not applied during the evaluation.** The evaluation is of fullsend's *defaults*;
+   disabling default behaviors mid-evaluation would contaminate it. Recorded here so
+   the recipe is actionable afterward (or as a phase-2 experiment: apply it and evaluate
+   whether the calm repo loses anything the auto-loop was catching). The goal: every
+   write-capable or spend-bearing agent runs only on explicit human command.
+   - **Stop auto-code promotion** (F12): `TRIAGE_AUTO_CODE` is a harness env var in
+     upstream `fullsend-ai/agents/harness/triage.yaml`, not a config.yaml key. Override
+     via `base:` composition — register the triage agent with a small local harness
+     that pins the upstream file (commit + `#sha256=`) and sets `TRIAGE_AUTO_CODE:
+     "off"` in **both** `env.runner` and `env.sandbox` (the post-script applies labels;
+     the agent recommends them — both read the var and must agree). Triage then labels
+     qualifying issues `triaged` instead of `ready-to-code`, and `/fs-code` remains the
+     human gate.
+   - **Review on command only**: a `trigger` on the `review` entry in config.yaml
+     replaces its default stage routing (auto-review on every PR open/push/label).
+     Gate it to `/fs-review` from a human. Tradeoff: the fix→review quality loop
+     becomes the human's responsibility; CI covers the mechanical checks.
+   - **Retro on command only**: same pattern, `/fs-retro` — no agent run on every merge.
+   - **Not controllable on GitHub** (documented): `code` and `fix` have no
+     config-triggerable routing; fix auto-fires on CHANGES_REQUESTED verdicts. Levers
+     remain per-PR (`/fs-fix-stop`), the iteration cap, and process discipline (rec 1).
+   - **Emergency stop**: `kill_switch: true` in config.yaml disables everything,
+     instantly and reversibly.
+   - **Per-PR, no config needed**: `/fs-fix-stop` on any PR kills bot-triggered fix
+     rounds (human `/fs-fix` still works); remove the label to re-enable.
+   Local artifacts: `.fullsend/config.yaml.orig` (byte-identical archive of the
+   pre-change config) and `config_options.md` (working notes) — kept uncommitted.
 
 ---
 
 ## 5. Final state
 
-- **PR #3 merged** (2026-11-12 ~17:15 UTC, by the human). Final head merged: `b7bdd56`
-  — compiles, `swift test` 51/51 locally verified.
-- **The loop terminated by design**: fix iteration 7 exceeded the bot cap of 5, the run
-  failed pre-sandbox with an escalation message, `needs-human` was applied, and the
-  human merged. Total: 7 review rounds, 6 fix rounds (2 human-triggered, 3
-  bot-triggered, 1 lost to the ruleset), 1 compile verification by the human.
-- **Remaining low-severity findings triaged into issue #5** rather than spent on
-  further fix rounds.
-- **Retro agent completed on the merge** (17:17–17:40 UTC) and filed **issue #8**
-  ("Add macOS CI running swift build and swift test on PRs") — its process-improvement
-  proposal, independently matching findings F8/F11. Not yet triaged/implemented.
-- **Code agent is running autonomously on issue #6** (exit-127 fix, auto-promoted by
-  triage — F12); expect a PR. Issue #7 (polish batch) and #4 (PR-review wizard) remain
-  unstarted.
-- Local artifacts: test worktree `../dev-buddy-pr3` (branch `pr3-test`, can be removed
-  with `git worktree remove ../dev-buddy-pr3` from the main checkout) and this findings
-  document (uncommitted).
+*(Updated 2026-11-13 ~15:00 UTC.)*
+
+- **PR #3 merged** (2026-11-12 ~17:15 UTC, by the human). Final head merged: `b7bdd56`.
+  The loop terminated at its iteration cap: 7 review rounds, 6 fix rounds, 1 compile
+  verification by the human.
+- **PR #9 merged** (2026-11-12 22:57 UTC) — the auto-coded exit-127 fix, after its own
+  loop run (merge-conflict resolution, the F1 per-run-instruction extension). Issue #6
+  closed by the merge. Retro auto-fired (observation #3).
+- **PR #12 merged** (2026-11-12 22:58 UTC) — the CI least-privilege fix. Retro
+  auto-fired (observation #4), correctly reconstructing the F13 chain in its write-up.
+- **CI is live on main** (PR #11, `a76376c`): `swift build` + `swift test` on macos-26,
+  every PR and push. 135/135 tests on main; issue #8 closed.
+- **PR #14 open and in an active fix loop** (issue #4's implementation, ~1,341 lines):
+  coder → review (16 findings) → bot fix (all 16, including lows) → human's scoped
+  instruction arrived 25 min late (F14) → fix iteration 2 reverted the lows to comply →
+  CI red on all three commits (4 worktree-test failures the agent cannot reproduce,
+  F15). Review round 3 in flight as of 14:19 UTC. Levers: a scoped `/fs-fix` with the
+  root cause pasted inline, `/fs-fix-stop`, or human diagnosis of the CI failure.
+- **The evaluation continues with all defaults on** — see recommendation 7.
+- Issues open: #4 (PR #14 pending). Zombie run 43095470483 still queued (harmless).
+- Local artifacts: test worktree `../dev-buddy-pr3` (removable), uncommitted
+  `.fullsend/config.yaml.orig` and `config_options.md` (recommendation-7 working
+  material).
 
 ---
 
