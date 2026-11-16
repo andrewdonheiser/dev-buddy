@@ -147,6 +147,12 @@
       accumulated lows to the dormant archive issue (#16), cross-reference
       upstream fullsend-ai/agents#1141 and fullsend-ai/agents#1760
 
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
+
 # Review finding policy durability (issue #20)
 
 - [x] AGENTS.md "Review finding policy": low-severity findings that are
@@ -160,12 +166,6 @@
       iteration (short bulleted list with file:line and the finding text)
 - [x] Fix the two bare issue-number shorthands (AGENTS.md and TASKS.md)
       to the upstream form fullsend-ai/agents#1760
-
-## Verify
-- [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
-      change, no source files touched, see PR)
-- [ ] `swift test` (not run: no Swift toolchain in this sandbox — docs-only
-      change, no source files touched, see PR)
 
 ## Verify
 - [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
