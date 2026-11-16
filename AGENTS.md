@@ -92,11 +92,18 @@ targets: `MarkdownViewerKitTests`, `MarkdownViewerChatTests`,
 - **Record low-severity and nit findings as disagreements** citing this
   policy instead of fixing them, unless the human's `/fs-fix` instruction
   explicitly asks for them (e.g. `/fs-fix fix everything` overrides this
-  default).
+  default). Exception: low-severity findings that are objective, verifiable
+  defects in lines the PR itself introduces (broken references, incorrect
+  facts, malformed syntax) are fixed in the first fix iteration regardless
+  of severity; the low-deferral default applies to preference-dependent
+  nitpicks and findings on pre-existing code.
 - **Defer accumulated low findings** to the dormant archive issue (#16)
-  rather than spending further fix rounds on them. The upstream verdict-side
+  rather than spending further fix rounds on them. When recording low
+  findings as disagreements, the fix agent appends them to #16 in the same
+  iteration — a short bulleted list with file:line and the finding text —
+  so deferred findings survive PR-comment burial. The upstream verdict-side
   behavior for low-only findings is tracked elsewhere
-  (fullsend-ai/agents#1141, #1760).
+  (fullsend-ai/agents#1141, fullsend-ai/agents#1760).
 
 ## Workflow conventions
 

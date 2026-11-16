@@ -145,7 +145,27 @@
       the first fix iteration, record low/nit findings as disagreements citing
       the policy (overridable by an explicit `/fs-fix` instruction), defer
       accumulated lows to the dormant archive issue (#16), cross-reference
-      upstream fullsend-ai/agents#1141 and #1760
+      upstream fullsend-ai/agents#1141 and fullsend-ai/agents#1760
+
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
+
+# Review finding policy durability (issue #20)
+
+- [x] AGENTS.md "Review finding policy": low-severity findings that are
+      objective, verifiable defects in lines the PR itself introduces
+      (broken references, incorrect facts, malformed syntax) are fixed in
+      the first fix iteration regardless of severity; the low-deferral
+      default applies to preference-dependent nitpicks and findings on
+      pre-existing code
+- [x] Deferral executor: when recording low findings as disagreements, the
+      fix agent appends them to the dormant archive issue (#16) in the same
+      iteration (short bulleted list with file:line and the finding text)
+- [x] Fix the two bare issue-number shorthands (AGENTS.md and TASKS.md)
+      to the upstream form fullsend-ai/agents#1760
 
 ## Verify
 - [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
