@@ -9,8 +9,11 @@ import WebKit
 /// Unlike the Markdown web view, the browser runs with JavaScript enabled:
 /// the pages it shows need it, while rendered Markdown does not — the two
 /// stay separate views so neither configuration leaks into the other.
+///
+/// Inherits `NSObject` because the `WKNavigationDelegate` conformance
+/// below requires it (WebKit's delegate protocols are NSObject protocols).
 @MainActor
-final class BrowserSession: ObservableObject {
+final class BrowserSession: NSObject, ObservableObject {
 
     /// The web view this session hosts, exposed read-only for
     /// `BrowserHostingView` — the SwiftUI bridge that mounts it in the

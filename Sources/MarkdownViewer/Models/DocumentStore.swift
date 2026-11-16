@@ -237,6 +237,12 @@ final class DocumentStore: ObservableObject {
         if selectedDocument == nil, !terminals.isEmpty {
             selectedTerminalID = terminals[min(index, terminals.count - 1)].id
         }
+        // With no neighboring terminal either, fall back to an open
+        // browser tab — the same fallback chain `close(_:)` applies, so
+        // the detail column never goes blank while a pane tab is open.
+        if selectedDocument == nil && selectedTerminalID == nil && selectedBrowserID == nil {
+            selectedBrowserID = browsers.first?.id
+        }
     }
 
     /// Asks to close a terminal tab: closing kills the shell and its child
@@ -321,6 +327,12 @@ final class DocumentStore: ObservableObject {
         // view; with no document open, fall back to a neighboring browser.
         if selectedDocument == nil, !browsers.isEmpty {
             selectedBrowserID = browsers[min(index, browsers.count - 1)].id
+        }
+        // With no neighboring browser either, fall back to an open
+        // terminal tab — the same fallback chain `close(_:)` applies, so
+        // the detail column never goes blank while a pane tab is open.
+        if selectedDocument == nil && selectedBrowserID == nil && selectedTerminalID == nil {
+            selectedTerminalID = terminals.first?.id
         }
     }
 

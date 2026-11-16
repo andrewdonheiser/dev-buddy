@@ -79,6 +79,43 @@ struct BrowserTabTests {
         #expect(store.browsers.map(\.id) == [first.id])
     }
 
+    @Test("closing the last browser with no document falls back to an open terminal")
+    func closingLastBrowserFallsBackToTerminal() {
+        let store = makeStore()
+        defer { store.closeAll() }
+
+        let terminal = store.openTerminalTab()
+        // Opening the browser takes the column from the terminal.
+        let browser = store.openBrowserTab(url: makeURL("https://example.com"))
+        #expect(store.selectedBrowser?.id == browser.id)
+        #expect(store.selectedTerminal == nil)
+
+        store.closeBrowser(browser.id)
+
+        // With no documents or sibling browsers, the open terminal takes
+        // the column back instead of leaving it blank.
+        #expect(store.selectedBrowser == nil)
+        #expect(store.selectedTerminal?.id == terminal.id)
+    }
+
+    @Test("closing the last terminal with no document falls back to an open browser")
+    func closingLastTerminalFallsBackToBrowser() {
+        let store = makeStore()
+        defer { store.closeAll() }
+
+        let browser = store.openBrowserTab(url: makeURL("https://example.com"))
+        let terminal = store.openTerminalTab()
+        #expect(store.selectedTerminal?.id == terminal.id)
+        #expect(store.selectedBrowser == nil)
+
+        store.closeTerminal(terminal.id)
+
+        // With no documents or sibling terminals, the open browser takes
+        // the column back instead of leaving it blank.
+        #expect(store.selectedTerminal == nil)
+        #expect(store.selectedBrowser?.id == browser.id)
+    }
+
     @Test("closing the last document falls back to an open browser")
     func fallbackToBrowserAfterLastDocument() throws {
         let store = makeStore()
