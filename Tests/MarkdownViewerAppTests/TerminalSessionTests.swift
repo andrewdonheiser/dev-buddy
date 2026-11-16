@@ -80,7 +80,16 @@ struct TerminalSessionTests {
                                               ofItemAtPath: script.path)
         defer { try? FileManager.default.removeItem(at: script) }
 
-        let session = makeSession(shellPath: script.path)
+        // The clock is fixed, mirroring the exit-126 test below: the launch
+        // window classifies a 127 termination as an exec failure only while
+        // it arrives within two seconds of `launchedAt`, and on a loaded CI
+        // runner the reaping callback can sit in the main-actor queue far
+        // longer than the process took to die — which would misroute the
+        // failure to the normal-exit path. Fixing the clock keeps the
+        // classification deterministic while the real spawn still proves
+        // the exit code is delivered as 127.
+        let session = makeSession(shellPath: script.path,
+                                  now: { Date(timeIntervalSinceReferenceDate: 0) })
 
         #expect(await waitUntil(timeout: .seconds(5)) { session.hasExited })
 
