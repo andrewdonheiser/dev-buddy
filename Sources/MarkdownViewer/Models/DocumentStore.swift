@@ -24,6 +24,13 @@ final class DocumentStore: ObservableObject {
     @Published private(set) var selectedTerminalID: TerminalTab.ID?
     /// Terminal tabs, in open order.
     @Published private(set) var terminals: [TerminalTab] = []
+    /// Browser tabs, in open order.
+    @Published private(set) var browsers: [BrowserTab] = []
+    /// The browser tab shown in the embedded browser pane, if any; a
+    /// visible browser takes the detail column just like a visible
+    /// terminal does. Settable only inside the store so the precedence
+    /// rule cannot be bypassed from outside.
+    @Published private(set) var selectedBrowserID: BrowserTab.ID?
     /// The terminal tab whose close is awaiting confirmation, if any.
     @Published private(set) var pendingCloseTerminalID: TerminalTab.ID?
 
@@ -33,10 +40,25 @@ final class DocumentStore: ObservableObject {
     typealias LivenessProbe = @MainActor (TerminalTab.ID) -> Bool
     typealias SessionRemover = @MainActor (TerminalTab.ID) -> Void
     typealias SessionProvider = @MainActor (TerminalTab, (@MainActor (String) -> Void)?) -> TerminalSession
+    /// The external link opener — the seam link routing uses so tests can
+    /// record non-web links (mailto:, etc.) instead of launching system
+    /// handlers.
+    typealias ExternalLinkOpener = @MainActor (URL) -> Void
+    /// The browser session factory, injected so tests can create sessions
+    /// without loading real pages.
+    typealias BrowserSessionFactory = @MainActor (BrowserTab, (@MainActor (String) -> Void)?) -> BrowserSession
 
     private let hasLiveTerminalProcess: LivenessProbe
     private let removeTerminalSession: SessionRemover
     private let terminalSessionProvider: SessionProvider
+    /// Where links the in-app browser cannot show go (mirroring the web
+    /// view's old behavior of handing them to the system).
+    private let openExternalURL: ExternalLinkOpener
+    /// Creates a browser tab's session on first request.
+    private let browserSessionFactory: BrowserSessionFactory
+    /// One session per browser tab, for the life of the tab, so pages
+    /// survive tab switches.
+    private var browserSessions: [BrowserTab.ID: BrowserSession] = [:]
 
     /// The registry that records the files this store opens; injected so
     /// tests can open documents against a scratch registry.
@@ -53,10 +75,16 @@ final class DocumentStore: ObservableObject {
     init(hasLiveTerminalProcess: @escaping LivenessProbe = { TerminalSessionManager.shared.hasLiveProcess($0) },
          removeTerminalSession: @escaping SessionRemover = { TerminalSessionManager.shared.removeSession($0) },
          terminalSessionProvider: @escaping SessionProvider = { TerminalSessionManager.shared.session($0, onTitleChange: $1) },
+         openExternalURL: @escaping ExternalLinkOpener = { NSWorkspace.shared.open($0) },
+         browserSessionFactory: @escaping BrowserSessionFactory = { browser, onTitleChange in
+             BrowserSession(url: browser.url, initialTitle: browser.title, onTitleChange: onTitleChange)
+         },
          labels: LabelStore = .shared) {
         self.hasLiveTerminalProcess = hasLiveTerminalProcess
         self.removeTerminalSession = removeTerminalSession
         self.terminalSessionProvider = terminalSessionProvider
+        self.openExternalURL = openExternalURL
+        self.browserSessionFactory = browserSessionFactory
         self.labels = labels
         // Re-render every document when the reading width or text size changes.
         options.$contentWidth
@@ -83,6 +111,11 @@ final class DocumentStore: ObservableObject {
         return terminals.first { $0.id == selectedTerminalID }
     }
 
+    var selectedBrowser: BrowserTab? {
+        guard let selectedBrowserID else { return nil }
+        return browsers.first { $0.id == selectedBrowserID }
+    }
+
     /// The document-selection stream, for the cross-store wiring in
     /// `SelectionCoordinator` — selection stays settable only inside the
     /// store, so the coordinator observes instead.
@@ -95,14 +128,20 @@ final class DocumentStore: ObservableObject {
         $selectedTerminalID.eraseToAnyPublisher()
     }
 
+    /// The browser-selection stream, likewise.
+    var browserSelectionUpdates: AnyPublisher<BrowserTab.ID?, Never> {
+        $selectedBrowserID.eraseToAnyPublisher()
+    }
+
     /// Selects a document for reading and the chat panel, returning the
     /// detail column to Markdown — the single place the "selecting a
-    /// document leaves the terminal pane" rule lives. Unknown ids are
-    /// ignored, mirroring `selectTerminal(_:)`.
+    /// document leaves the terminal and browser panes" rule lives. Unknown
+    /// ids are ignored, mirroring `selectTerminal(_:)`.
     func selectDocument(_ id: OpenDocument.ID) {
         guard documents.contains(where: { $0.id == id }) else { return }
         selectedID = id
         selectedTerminalID = nil
+        selectedBrowserID = nil
     }
 
     // MARK: - Terminal tabs
@@ -123,18 +162,21 @@ final class DocumentStore: ObservableObject {
         }
     }
 
-    /// Selects a terminal tab to show in the terminal pane.
+    /// Selects a terminal tab to show in the terminal pane, taking the
+    /// column from a visible browser; selecting a document takes it back.
     func selectTerminal(_ id: TerminalTab.ID) {
         guard terminals.contains(where: { $0.id == id }) else { return }
         selectedTerminalID = id
+        selectedBrowserID = nil
     }
 
-    /// Returns the detail column from the terminal pane without touching the
-    /// surviving document selection — the counterpart to
+    /// Returns the detail column from the terminal or browser pane without
+    /// touching the surviving document selection — the counterpart to
     /// `selectDocument(_:)`'s pane rule, used when a review work unit's
     /// overview takes the column.
-    func dismissTerminalPane() {
+    func dismissPanes() {
         selectedTerminalID = nil
+        selectedBrowserID = nil
     }
 
     /// Opens a terminal tab running the user's login shell in `directory`,
@@ -143,6 +185,7 @@ final class DocumentStore: ObservableObject {
     func openTerminal(in directory: URL, workUnitID: WorkUnit.ID? = nil) -> TerminalTab {
         let terminal = TerminalTab(workingDirectory: directory, workUnitID: workUnitID)
         terminals.append(terminal)
+        selectedBrowserID = nil
         selectedTerminalID = terminal.id
         return terminal
     }
@@ -232,6 +275,80 @@ final class DocumentStore: ObservableObject {
         terminals[index].title = title
     }
 
+    // MARK: - Browser tabs
+
+    /// Selects a browser tab to show in the browser pane, taking the column
+    /// from a visible terminal; selecting a document or terminal takes it
+    /// back.
+    func selectBrowser(_ id: BrowserTab.ID) {
+        guard browsers.contains(where: { $0.id == id }) else { return }
+        selectedTerminalID = nil
+        selectedBrowserID = id
+    }
+
+    /// Opens a browser tab showing `url`, nested under the review work unit
+    /// when one is given; browsers without one appear as top-level tabs.
+    @discardableResult
+    func openBrowserTab(url: URL, workUnitID: WorkUnit.ID? = nil) -> BrowserTab {
+        let browser = BrowserTab(url: url, workUnitID: workUnitID)
+        browsers.append(browser)
+        selectedTerminalID = nil
+        selectedBrowserID = browser.id
+        return browser
+    }
+
+    /// Opens a link from `document` in an in-app browser tab instead of an
+    /// external browser: web pages nest under the document's review work
+    /// unit when the document is nested in one, and open top-level
+    /// otherwise. Links the browser pane cannot show (mailto:, etc.) still
+    /// go to the system handler.
+    func openBrowserTab(forLink url: URL, from document: OpenDocument) {
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            openBrowserTab(url: url, workUnitID: document.workUnitID)
+        } else {
+            openExternalURL(url)
+        }
+    }
+
+    /// Closes a browser tab and releases its web page.
+    func closeBrowser(_ id: BrowserTab.ID) {
+        guard let index = browsers.firstIndex(where: { $0.id == id }) else { return }
+        browsers.remove(at: index)
+        browserSessions.removeValue(forKey: id)?.stop()
+        guard selectedBrowserID == id else { return }
+        selectedBrowserID = nil
+        // Closing the visible browser returns to the selected document's
+        // view; with no document open, fall back to a neighboring browser.
+        if selectedDocument == nil, !browsers.isEmpty {
+            selectedBrowserID = browsers[min(index, browsers.count - 1)].id
+        }
+    }
+
+    /// The browser tabs nested under a review work unit, in open order.
+    func browsers(inWorkUnit id: WorkUnit.ID) -> [BrowserTab] {
+        browsers.filter { $0.workUnitID == id }
+    }
+
+    /// The tab's browser session, created (and loading its page) on first
+    /// request; the session's title updates stream back into the tab list.
+    /// Returns nil for an id that is not an open tab.
+    func browserSession(_ id: BrowserTab.ID) -> BrowserSession? {
+        guard let browser = browsers.first(where: { $0.id == id }) else { return nil }
+        if let existing = browserSessions[id] { return existing }
+        let session = browserSessionFactory(browser) { [weak self] title in
+            self?.updateBrowserTitle(id, title: title)
+        }
+        browserSessions[id] = session
+        return session
+    }
+
+    /// Updates a browser tab's title as its page reports it.
+    func updateBrowserTitle(_ id: BrowserTab.ID, title: String) {
+        guard let index = browsers.firstIndex(where: { $0.id == id }),
+              !title.isEmpty, browsers[index].title != title else { return }
+        browsers[index].title = title
+    }
+
     // MARK: - Opening
 
     func presentOpenPanel() {
@@ -246,7 +363,7 @@ final class DocumentStore: ObservableObject {
         }
     }
 
-    func open(urls: [URL]) {
+    func open(urls: [URL], workUnitID: WorkUnit.ID? = nil) {
         for url in urls {
             let standardized = url.standardizedFileURL
 
@@ -263,7 +380,7 @@ final class DocumentStore: ObservableObject {
                 labels.register(path: standardized.path)
                 continue
             }
-            guard let document = makeDocument(for: standardized) else { continue }
+            guard let document = makeDocument(for: standardized, workUnitID: workUnitID) else { continue }
             documents.append(document)
             selectDocument(document.id)
             startWatching(document)
@@ -271,19 +388,53 @@ final class DocumentStore: ObservableObject {
         }
     }
 
-    func open(url: URL) {
-        open(urls: [url])
+    func open(url: URL, workUnitID: WorkUnit.ID? = nil) {
+        open(urls: [url], workUnitID: workUnitID)
     }
 
-    private func makeDocument(for url: URL) -> OpenDocument? {
+    private func makeDocument(for url: URL, workUnitID: WorkUnit.ID? = nil) -> OpenDocument? {
         guard let markdown = readMarkdown(at: url) else { return nil }
         let html = render(markdown: markdown, baseURL: url.deletingLastPathComponent())
         return OpenDocument(
             url: url,
             markdown: markdown,
             html: html,
-            lastModified: modificationDate(of: url)
+            lastModified: modificationDate(of: url),
+            workUnitID: workUnitID
         )
+    }
+
+    /// The documents nested under a review work unit, in open order.
+    func documents(inWorkUnit id: WorkUnit.ID) -> [OpenDocument] {
+        documents.filter { $0.workUnitID == id }
+    }
+
+    // MARK: - Creating new files
+
+    /// Creates a new Markdown file in `directory` — the first free
+    /// "Untitled.md", "Untitled 2.md", … — and opens it as a document
+    /// nested under the review work unit when one is given. Returns nil
+    /// only when the just-written file could not be opened back.
+    @discardableResult
+    func openNewMarkdown(in directory: URL, workUnitID: WorkUnit.ID? = nil) throws -> OpenDocument? {
+        let url = Self.availableFileURL(baseName: "Untitled", fileExtension: "md", in: directory)
+        try "# Untitled\n".write(to: url, atomically: true, encoding: .utf8)
+        open(url: url, workUnitID: workUnitID)
+        return documents.first { $0.url == url }
+    }
+
+    /// The first "Name.md", "Name 2.md", … in `directory` that no file
+    /// uses, so repeated creations never collide.
+    private static func availableFileURL(baseName: String, fileExtension: String, in directory: URL) -> URL {
+        let fileManager = FileManager.default
+        let first = directory.appendingPathComponent("\(baseName).\(fileExtension)")
+        if !fileManager.fileExists(atPath: first.path) { return first }
+        var index = 2
+        while true {
+            let candidate = directory.appendingPathComponent("\(baseName) \(index).\(fileExtension)")
+            if !fileManager.fileExists(atPath: candidate.path) { return candidate }
+            index += 1
+        }
     }
 
     private func readMarkdown(at url: URL) -> String? {
@@ -311,10 +462,13 @@ final class DocumentStore: ObservableObject {
             if documents.isEmpty {
                 selectedID = nil
                 // With no documents left, fall back to a terminal tab when
-                // one is open — without displacing a terminal that is
-                // already selected and visible.
+                // one is open, then to a browser tab — without displacing a
+                // pane that is already selected and visible.
                 if selectedTerminalID == nil {
                     selectedTerminalID = terminals.first?.id
+                }
+                if selectedTerminalID == nil && selectedBrowserID == nil {
+                    selectedBrowserID = browsers.first?.id
                 }
             } else {
                 let nextIndex = min(index, documents.count - 1)
@@ -327,10 +481,15 @@ final class DocumentStore: ObservableObject {
     }
 
     func closeSelected() {
-        // With a terminal on screen, ⌘W closes that first, not its document —
-        // with the same close confirmation as the terminal's own buttons.
+        // With a terminal on screen, ⌘W closes that first, then a browser —
+        // not their document — with the same close confirmation as the
+        // terminal's own buttons.
         if let terminalID = selectedTerminalID {
             requestCloseTerminal(terminalID)
+            return
+        }
+        if let browserID = selectedBrowserID {
+            closeBrowser(browserID)
             return
         }
         guard let selectedID else { return }
@@ -339,14 +498,21 @@ final class DocumentStore: ObservableObject {
 
     /// Whether ⌘W has anything to close right now.
     var canCloseSelected: Bool {
-        selectedID != nil || selectedTerminalID != nil
+        selectedID != nil || selectedTerminalID != nil || selectedBrowserID != nil
+    }
+
+    /// The label for the ⌘W command: the visible tab kind it will close.
+    var closeSelectedTitle: String {
+        if selectedTerminalID != nil { return "Close Terminal" }
+        if selectedBrowserID != nil { return "Close Browser" }
+        return "Close Tab"
     }
 
     /// Whether ⌘R has anything to reload right now: it acts on the visible
-    /// tab, and a selected terminal takes the detail column while hiding the
-    /// document it would reload.
+    /// tab, and a selected terminal or browser takes the detail column
+    /// while hiding the document it would reload.
     var canRefreshSelected: Bool {
-        selectedTerminalID == nil && selectedID != nil
+        selectedTerminalID == nil && selectedBrowserID == nil && selectedID != nil
     }
 
     /// Closes every open document, keeping terminal tabs (and their running
@@ -360,9 +526,12 @@ final class DocumentStore: ObservableObject {
         if selectedTerminalID == nil {
             selectedTerminalID = terminals.first?.id
         }
+        if selectedTerminalID == nil && selectedBrowserID == nil {
+            selectedBrowserID = browsers.first?.id
+        }
     }
 
-    /// Closes every open document and terminal.
+    /// Closes every open document, terminal and browser.
     func closeAll() {
         closeAllDocuments()
         for terminal in terminals {
@@ -371,6 +540,10 @@ final class DocumentStore: ObservableObject {
         terminals = []
         selectedTerminalID = nil
         pendingCloseTerminalID = nil
+        for session in browserSessions.values { session.stop() }
+        browserSessions = [:]
+        browsers = []
+        selectedBrowserID = nil
     }
 
     // MARK: - Saved views
@@ -401,11 +574,15 @@ final class DocumentStore: ObservableObject {
     // MARK: - Navigation
 
     /// The index of the selected tab in the open order (documents first,
-    /// then terminals); a visible terminal wins over the surviving document
-    /// selection, so cycling follows what is on screen.
+    /// then terminals, then browsers); a visible terminal or browser wins
+    /// over the surviving document selection, so cycling follows what is on
+    /// screen.
     private var currentTabIndex: Int? {
         if let selectedTerminalID, let index = terminals.firstIndex(where: { $0.id == selectedTerminalID }) {
             return documents.count + index
+        }
+        if let selectedBrowserID, let index = browsers.firstIndex(where: { $0.id == selectedBrowserID }) {
+            return documents.count + terminals.count + index
         }
         if let selectedID, let index = documents.firstIndex(where: { $0.id == selectedID }) {
             return index
@@ -414,23 +591,29 @@ final class DocumentStore: ObservableObject {
     }
 
     private func selectTab(at index: Int) {
-        guard index >= 0, index < documents.count + terminals.count else { return }
+        let terminalBase = documents.count
+        let browserBase = terminalBase + terminals.count
+        guard index >= 0, index < browserBase + browsers.count else { return }
         if index < documents.count {
             selectDocument(documents[index].id)
+        } else if index < terminalBase + terminals.count {
+            selectedBrowserID = nil
+            selectedTerminalID = terminals[index - terminalBase].id
         } else {
-            selectedTerminalID = terminals[index - documents.count].id
+            selectedTerminalID = nil
+            selectedBrowserID = browsers[index - browserBase].id
         }
     }
 
     func selectNext() {
-        let count = documents.count + terminals.count
+        let count = documents.count + terminals.count + browsers.count
         guard count > 0 else { return }
         let index = (currentTabIndex ?? -1) + 1
         selectTab(at: index % count)
     }
 
     func selectPrevious() {
-        let count = documents.count + terminals.count
+        let count = documents.count + terminals.count + browsers.count
         guard count > 0 else { return }
         let index = (currentTabIndex ?? count) - 1
         selectTab(at: (index + count) % count)

@@ -478,8 +478,8 @@ struct SelectionPrecedenceTests {
         return DocumentStore(labels: LabelStore(storageURL: scratchLabels))
     }
 
-    @Test("selecting a document or terminal through any path clears the work unit selection")
-    func documentAndTerminalSelectionClearUnit() async throws {
+    @Test("selecting a document, terminal or browser through any path clears the work unit selection")
+    func documentTerminalAndBrowserSelectionClearUnit() async throws {
         let fixture = WorkUnitFixture()
         let unit = try await fixture.store.createReview(
             prURLString: "https://github.com/owner/repo/pull/12",
@@ -489,9 +489,11 @@ struct SelectionPrecedenceTests {
         // are what enforces the rule under test.
         let coordinator = SelectionCoordinator(store: store, workUnits: fixture.store)
         let documentURL = try makeTempFile("# Hello")
+        let nestedURL = try makeTempFile("# Nested")
         defer {
             store.closeAll()
             try? FileManager.default.removeItem(at: documentURL)
+            try? FileManager.default.removeItem(at: nestedURL)
             try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
         }
 
@@ -516,6 +518,20 @@ struct SelectionPrecedenceTests {
             let terminal = store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
 
             #expect(store.selectedTerminal?.id == terminal.id)
+            #expect(fixture.store.selectedWorkUnitID == nil)
+
+            // Re-selecting the unit and then opening a link from a
+            // document nested in it into a browser tab (the link-click
+            // path) hands the column to the browser the same way, and the
+            // tab nests under the document's unit.
+            fixture.store.select(unit.id)
+            store.open(url: nestedURL, workUnitID: unit.id)
+            let nestedDocument = try #require(store.documents.first { $0.url == nestedURL })
+            let browser = store.openBrowserTab(forLink: URL(string: "https://github.com/owner/repo/pull/12")!,
+                                               from: nestedDocument)
+
+            #expect(store.selectedBrowser?.id == browser.id)
+            #expect(browser.workUnitID == unit.id)
             #expect(fixture.store.selectedWorkUnitID == nil)
         }
     }

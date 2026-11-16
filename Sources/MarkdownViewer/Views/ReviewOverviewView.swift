@@ -37,7 +37,7 @@ struct ReviewOverviewView: View {
             Button("Delete Review and Worktree", role: .destructive) { delete() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("The worktree at \(unit.worktreePath) will be removed from disk, and terminals running in it will be closed. This cannot be undone.")
+            Text("The worktree at \(unit.worktreePath) will be removed from disk, and the documents, terminals and browsers nested in it will be closed. This cannot be undone.")
         }
     }
 
@@ -152,16 +152,22 @@ struct ReviewOverviewView: View {
     }
 
     /// Deletes the review: the record and the worktree go first, and its
-    /// terminals close only once the removal has succeeded (the confirmation
-    /// above says they will) — a failed removal keeps the review in place
-    /// and selected, so the error below stays on screen and the delete can
-    /// be retried.
+    /// nested tabs close only once the removal has succeeded (the
+    /// confirmation above says they will) — a failed removal keeps the
+    /// review in place and selected, so the error below stays on screen and
+    /// the delete can be retried.
     private func delete() {
         deleteError = nil
         do {
             try workUnits.delete(unit.id)
             for terminal in store.terminals where terminal.workUnitID == unit.id {
                 store.closeTerminal(terminal.id)
+            }
+            for browser in store.browsers where browser.workUnitID == unit.id {
+                store.closeBrowser(browser.id)
+            }
+            for document in store.documents where document.workUnitID == unit.id {
+                store.close(document.id)
             }
         } catch {
             let message = "The review's files could not be removed: \(error.localizedDescription)"

@@ -54,15 +54,22 @@ struct MainView: View {
     @ViewBuilder
     private var detail: some View {
         // Detail-column precedence: a selected terminal keeps the column
-        // (over the surviving document selection, as before), then the
-        // selected review work unit's overview, then the selected document.
-        // `SelectionCoordinator` keeps this coherent: selecting a document
-        // or terminal through any path clears the work-unit selection.
+        // (over the surviving document selection, as before), then a
+        // selected browser tab, then the selected review work unit's
+        // overview, then the selected document. `SelectionCoordinator`
+        // keeps this coherent: selecting a document, terminal or browser
+        // through any path clears the work-unit selection.
         if let terminal = store.selectedTerminal {
             // A terminal tab keeps the chat panel on screen, bound to the
             // selected document when one is open.
             chatSplit(TerminalPane(terminal: terminal)
                 .id(terminal.id),
+                document: store.selectedDocument)
+        } else if let browser = store.selectedBrowser {
+            // A browser tab does the same — the pane is the page, the chat
+            // panel keeps the selected document's context.
+            chatSplit(BrowserPane(browser: browser)
+                .id(browser.id),
                 document: store.selectedDocument)
         } else if let unit = workUnits.selectedWorkUnit {
             ReviewOverviewView(unit: unit)
@@ -96,7 +103,12 @@ struct MainView: View {
         VStack(spacing: 0) {
             header(for: document)
             Divider()
-            MarkdownWebView(html: document.html, revision: document.revision)
+            // External links open in an in-app browser tab — nested under
+            // the document's review work unit when it has one — instead of
+            // an external browser.
+            MarkdownWebView(html: document.html, revision: document.revision) { url in
+                store.openBrowserTab(forLink: url, from: document)
+            }
         }
         .frame(minWidth: 380, idealWidth: 720, minHeight: 300)
         .overlay(alignment: .bottomTrailing) {

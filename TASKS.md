@@ -138,3 +138,31 @@
 ## Verify
 - [ ] `swift build` (not run: no Swift toolchain in this sandbox — see PR)
 - [ ] `swift test` (not run: no Swift toolchain in this sandbox — see PR)
+
+# In-App Browser Tabs (issue #17)
+
+## App
+- [x] `BrowserTab` model (url, title, workUnitID) + `BrowserSession` holding a
+      JavaScript-enabled `WKWebView` (kept separate from the Markdown web view,
+      which stays script-free), with title/address/history streamed into the pane
+- [x] `DocumentStore` browser tabs: open/select/close, session cache behind an
+      injectable factory seam, title streaming, tab cycling and ⌘W/⌘R rules
+      alongside terminals
+- [x] Nest context menu: New Markdown in Worktree (creates the next free
+      "Untitled.md" in the worktree, opens it nested under the unit) and New
+      Browser in Worktree (opens the unit's PR page, nested under the unit)
+- [x] Documents gained a `workUnitID` so nested docs exist; link clicks from a
+      nested doc open an in-app browser tab under the same unit, top-level from
+      an unnested doc, and non-web links still go to the system handler
+      (`MarkdownWebView` routes external links through an injected seam)
+- [x] Sidebar: browser rows (top-level and nested under units), nested document
+      rows, search matching by title or address, context menu entries
+- [x] Review delete closes the unit's browsers and documents too, matching the
+      terminal handling
+- [x] Tests: browser lifecycle/selection/fallbacks, nesting rules for links,
+      new-markdown creation and failure, cycling, session reuse and title
+      streaming, sidebar row ids and search, selection-precedence coverage
+
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — see PR)

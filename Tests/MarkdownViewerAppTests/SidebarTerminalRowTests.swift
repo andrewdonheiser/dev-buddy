@@ -67,11 +67,57 @@ struct SidebarTerminalRowTests {
         #expect(SidebarItem.terminals(matchingQuery: "   ", in: [terminal]).isEmpty)
     }
 
+    @Test("browser row ids round-trip through the selection identity")
+    func browserRowIDRoundTrip() {
+        let id = UUID()
+        let rowID = SidebarItem.browserRowID(for: id)
+
+        #expect(rowID.hasPrefix(SidebarItem.browserIDPrefix))
+        #expect(SidebarItem.browserID(fromRowID: rowID) == id)
+        // Document and terminal row identities never decode as browsers.
+        #expect(SidebarItem.browserID(fromRowID: "/tmp/notes.md") == nil)
+        #expect(SidebarItem.browserID(fromRowID: SidebarItem.terminalRowID(for: id)) == nil)
+    }
+
+    @Test("the browser row exposes the tab like document rows expose files")
+    func browserAccessors() {
+        let browser = BrowserTab(url: URL(string: "https://github.com/owner/repo")!,
+                                 title: "owner/repo")
+        let item = SidebarItem.browser(browser)
+
+        #expect(item.browser?.id == browser.id)
+        #expect(item.document == nil)
+        #expect(item.title == "owner/repo")
+        #expect(item.fileName == "github.com")
+        #expect(item.path == "https://github.com/owner/repo")
+        #expect(item.labelNames.isEmpty)
+        #expect(item.id == SidebarItem.browserRowID(for: browser.id))
+    }
+
+    @Test("browser search matches by title or address")
+    func browserSearchMatchesByTitleOrAddress() {
+        let pr = BrowserTab(url: URL(string: "https://github.com/owner/repo/pull/12")!,
+                            title: "repo #12")
+        let docs = BrowserTab(url: URL(string: "https://example.com/docs")!,
+                              title: "Docs")
+        let browsers = [pr, docs]
+
+        #expect(SidebarItem.browsers(matchingQuery: "repo", in: browsers).map(\.id) == [pr.id])
+        #expect(SidebarItem.browsers(matchingQuery: "example.com", in: browsers).map(\.id) == [docs.id])
+        // Matching is case-insensitive.
+        #expect(SidebarItem.browsers(matchingQuery: "DOCS", in: browsers).map(\.id) == [docs.id])
+        #expect(SidebarItem.browsers(matchingQuery: "meeting", in: browsers).isEmpty)
+        // Browser tabs carry no labels, so they only surface for a text query.
+        #expect(SidebarItem.browsers(matchingQuery: "", in: browsers).isEmpty)
+    }
+
     @Test("the open-tab section keeps one heading regardless of the tab mix")
     func sectionTitleIsStableAcrossTabMixes() {
-        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 0) == "No Files")
-        #expect(TabSidebarView.sectionTitle(documentCount: 2, terminalCount: 0) == "Open Tabs")
-        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 3) == "Open Tabs")
-        #expect(TabSidebarView.sectionTitle(documentCount: 1, terminalCount: 2) == "Open Tabs")
+        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 0, browserCount: 0) == "No Files")
+        #expect(TabSidebarView.sectionTitle(documentCount: 2, terminalCount: 0, browserCount: 0) == "Open Tabs")
+        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 3, browserCount: 0) == "Open Tabs")
+        #expect(TabSidebarView.sectionTitle(documentCount: 1, terminalCount: 2, browserCount: 0) == "Open Tabs")
+        #expect(TabSidebarView.sectionTitle(documentCount: 0, terminalCount: 0, browserCount: 1) == "Open Tabs")
+        #expect(TabSidebarView.sectionTitle(documentCount: 1, terminalCount: 0, browserCount: 2) == "Open Tabs")
     }
 }

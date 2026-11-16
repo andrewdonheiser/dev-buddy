@@ -32,16 +32,20 @@ enum SidebarSort: String, CaseIterable, Identifiable {
     }
 }
 
-/// A row in the sidebar: an open tab (document or terminal), a review work
-/// unit, or a search result for a file that is not currently open.
+/// A row in the sidebar: an open tab (document, terminal or browser), a
+/// review work unit, or a search result for a file that is not currently
+/// open.
 enum SidebarItem: Identifiable {
     case open(OpenDocument, [String])
     case terminal(TerminalTab)
+    case browser(BrowserTab)
     case workUnit(WorkUnit)
     case result(LabeledFile)
 
     /// Prefix marking a terminal tab row.
     static let terminalIDPrefix = "terminal:"
+    /// Prefix marking a browser tab row.
+    static let browserIDPrefix = "browser:"
     /// Prefix marking a review work unit row.
     static let workUnitIDPrefix = "workunit:"
 
@@ -56,6 +60,17 @@ enum SidebarItem: Identifiable {
     static func terminalID(fromRowID rowID: String) -> TerminalTab.ID? {
         guard rowID.hasPrefix(terminalIDPrefix) else { return nil }
         return UUID(uuidString: String(rowID.dropFirst(terminalIDPrefix.count)))
+    }
+
+    /// The row identity encoding a browser tab.
+    static func browserRowID(for id: BrowserTab.ID) -> String {
+        browserIDPrefix + id.uuidString
+    }
+
+    /// The browser tab id encoded in a row identity, if the row is one.
+    static func browserID(fromRowID rowID: String) -> BrowserTab.ID? {
+        guard rowID.hasPrefix(browserIDPrefix) else { return nil }
+        return UUID(uuidString: String(rowID.dropFirst(browserIDPrefix.count)))
     }
 
     /// The row identity encoding a review work unit.
@@ -93,10 +108,23 @@ enum SidebarItem: Identifiable {
         }
     }
 
+    /// The browser tabs a sidebar search surfaces: browsers match by title
+    /// or address and carry no labels, so a label-only filter (an empty
+    /// query) excludes them.
+    static func browsers(matchingQuery query: String, in browsers: [BrowserTab]) -> [BrowserTab] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        return browsers.filter {
+            $0.title.localizedCaseInsensitiveContains(trimmed)
+                || $0.url.absoluteString.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
     var id: String {
         switch self {
         case .open(let document, _): return document.url.path
         case .terminal(let terminal): return Self.terminalRowID(for: terminal.id)
+        case .browser(let browser): return Self.browserRowID(for: browser.id)
         case .workUnit(let unit): return Self.workUnitRowID(for: unit.id)
         case .result(let file): return file.path
         }
@@ -106,6 +134,7 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(let document, _): return document.url.path
         case .terminal(let terminal): return terminal.workingDirectory.path
+        case .browser(let browser): return browser.url.absoluteString
         case .workUnit(let unit): return unit.worktreePath
         case .result(let file): return file.path
         }
@@ -121,6 +150,11 @@ enum SidebarItem: Identifiable {
         return nil
     }
 
+    var browser: BrowserTab? {
+        if case .browser(let browser) = self { return browser }
+        return nil
+    }
+
     var workUnit: WorkUnit? {
         if case .workUnit(let unit) = self { return unit }
         return nil
@@ -130,6 +164,7 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(let document, _): return document.title
         case .terminal(let terminal): return terminal.title
+        case .browser(let browser): return browser.title
         case .workUnit(let unit): return unit.title
         case .result(let file): return file.displayName
         }
@@ -139,6 +174,7 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(let document, _): return document.fileName
         case .terminal(let terminal): return terminal.workingDirectory.lastPathComponent
+        case .browser(let browser): return browser.url.host ?? browser.url.absoluteString
         case .workUnit(let unit):
             if let issue = unit.issueReference, !issue.isEmpty { return issue }
             return unit.prURL.absoluteString
@@ -150,6 +186,7 @@ enum SidebarItem: Identifiable {
         switch self {
         case .open(_, let names): return names
         case .terminal: return []
+        case .browser: return []
         case .workUnit: return []
         case .result(let file): return file.labels
         }
@@ -157,8 +194,9 @@ enum SidebarItem: Identifiable {
 }
 
 /// The left sidebar: open tabs, review work units with their nested
-/// terminals, colored label buttons, and a search field that surfaces
-/// labeled files (open or not) which can be opened from the results.
+/// documents, terminals and browsers, colored label buttons, and a search
+/// field that surfaces labeled files (open or not) which can be opened from
+/// the results.
 struct TabSidebarView: View {
     @EnvironmentObject private var store: DocumentStore
     @EnvironmentObject private var labels: LabelStore
@@ -168,8 +206,8 @@ struct TabSidebarView: View {
     @State private var query = ""
     @State private var sort: SidebarSort = .openOrder
     @State private var activeLabelID: FileLabel.ID?
-    /// Review work units whose nested terminals are collapsed; units start
-    /// expanded so the terminals the review opened are visible.
+    /// Review work units whose nested contents are collapsed; units start
+    /// expanded so the tabs the review opened are visible.
     @State private var collapsedUnitIDs: Set<WorkUnit.ID> = []
     @State private var isReviewWizardPresented = false
 
@@ -201,7 +239,7 @@ struct TabSidebarView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search files, labels, or terminals", text: $query)
+            TextField("Search files, labels, terminals, or browsers", text: $query)
                 .textFieldStyle(.plain)
             if !query.isEmpty {
                 Button {
@@ -278,8 +316,9 @@ struct TabSidebarView: View {
                 }
             } else {
                 Section(sectionTitle) {
-                    // Each review is a nested world: its terminals sit under
-                    // it in the tree, one disclosure group per work unit.
+                    // Each review is a nested world: its documents,
+                    // terminals and browsers sit under it in the tree, one
+                    // disclosure group per work unit.
                     ForEach(workUnits.activeUnits) { unit in
                         workUnitRow(unit)
                     }
@@ -302,13 +341,24 @@ struct TabSidebarView: View {
     }
 
     /// A work unit row: a disclosure group whose children are the unit's
-    /// terminals, and whose label offers another terminal in the worktree.
+    /// documents, terminals and browsers, and whose label offers another
+    /// terminal in the worktree.
     private func workUnitRow(_ unit: WorkUnit) -> some View {
         DisclosureGroup(isExpanded: unitExpansion(unit.id)) {
+            ForEach(store.documents(inWorkUnit: unit.id)) { document in
+                SidebarRow(item: documentItem(document), onFilterLabel: filterByLabel)
+                    .tag(document.url.path)
+                    .contextMenu { SidebarContextMenu(item: documentItem(document)) }
+            }
             ForEach(store.terminals(inWorkUnit: unit.id)) { terminal in
                 SidebarRow(item: .terminal(terminal), onFilterLabel: filterByLabel)
                     .tag(SidebarItem.terminalRowID(for: terminal.id))
                     .contextMenu { SidebarContextMenu(item: .terminal(terminal)) }
+            }
+            ForEach(store.browsers(inWorkUnit: unit.id)) { browser in
+                SidebarRow(item: .browser(browser), onFilterLabel: filterByLabel)
+                    .tag(SidebarItem.browserRowID(for: browser.id))
+                    .contextMenu { SidebarContextMenu(item: .browser(browser)) }
             }
         } label: {
             WorkUnitRowLabel(unit: unit)
@@ -317,7 +367,13 @@ struct TabSidebarView: View {
         .contextMenu { SidebarContextMenu(item: .workUnit(unit)) }
     }
 
-    /// The expansion binding for a work unit's nested terminals.
+    /// A document's sidebar item, with its label names — shared by the
+    /// top-level and nested rows.
+    private func documentItem(_ document: OpenDocument) -> SidebarItem {
+        .open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
+    }
+
+    /// The expansion binding for a work unit's nested contents.
     private func unitExpansion(_ id: WorkUnit.ID) -> Binding<Bool> {
         Binding(
             get: { !collapsedUnitIDs.contains(id) },
@@ -435,6 +491,9 @@ struct TabSidebarView: View {
                 if let terminal = store.selectedTerminal {
                     return SidebarItem.terminalRowID(for: terminal.id)
                 }
+                if let browser = store.selectedBrowser {
+                    return SidebarItem.browserRowID(for: browser.id)
+                }
                 if let unit = workUnits.selectedWorkUnit {
                     return SidebarItem.workUnitRowID(for: unit.id)
                 }
@@ -445,11 +504,15 @@ struct TabSidebarView: View {
                 if let unitID = SidebarItem.workUnitID(fromRowID: id) {
                     workUnits.select(unitID)
                     // The overview takes the detail column from a visible
-                    // terminal, mirroring how selecting a document does.
-                    store.dismissTerminalPane()
+                    // terminal or browser, mirroring how selecting a
+                    // document does.
+                    store.dismissPanes()
                 } else if let terminalID = SidebarItem.terminalID(fromRowID: id) {
                     workUnits.deselect()
                     store.selectTerminal(terminalID)
+                } else if let browserID = SidebarItem.browserID(fromRowID: id) {
+                    workUnits.deselect()
+                    store.selectBrowser(browserID)
                 } else if let document = store.documents.first(where: { $0.url.path == id }) {
                     workUnits.deselect()
                     store.selectDocument(document.id)
@@ -461,8 +524,8 @@ struct TabSidebarView: View {
         )
     }
 
-    /// The search-mode rows: matching files (open or not), terminals and
-    /// review work units.
+    /// The search-mode rows: matching files (open or not), terminals,
+    /// browsers and review work units.
     private var items: [SidebarItem] {
         var files = labels.search(query: trimmedQuery, sort: sort.searchOrder ?? .label)
         if let id = activeLabelID, let name = labels.label(id: id)?.name {
@@ -477,6 +540,9 @@ struct TabSidebarView: View {
         // Terminal tabs match by title or directory; they carry no labels.
         results += SidebarItem.terminals(matchingQuery: trimmedQuery, in: store.terminals)
             .map { SidebarItem.terminal($0) }
+        // Browser tabs match by title or address; they carry no labels.
+        results += SidebarItem.browsers(matchingQuery: trimmedQuery, in: store.browsers)
+            .map { SidebarItem.browser($0) }
         // Review work units match by title, PR URL or linked issue.
         results += SidebarItem.workUnits(matchingQuery: trimmedQuery, in: workUnits.units)
             .map { SidebarItem.workUnit($0) }
@@ -484,14 +550,19 @@ struct TabSidebarView: View {
     }
 
     /// The non-search rows that are not nested under a work unit: documents
-    /// and top-level terminals, in the chosen order.
+    /// and top-level terminals and browsers, in the chosen order.
     private var openItems: [SidebarItem] {
-        var openItems = orderedDocuments.map { document in
-            SidebarItem.open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
-        }
+        var openItems = orderedDocuments
+            .filter { $0.workUnitID == nil }
+            .map { document in
+                SidebarItem.open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
+            }
         openItems += store.terminals
             .filter { $0.workUnitID == nil }
             .map { SidebarItem.terminal($0) }
+        openItems += store.browsers
+            .filter { $0.workUnitID == nil }
+            .map { SidebarItem.browser($0) }
         return openItems
     }
 
@@ -506,9 +577,9 @@ struct TabSidebarView: View {
 
     /// The heading over the open-tab section: one stable name regardless of
     /// the tab mix, so the header the user learned never renames itself as
-    /// terminals or reviews come and go.
-    static func sectionTitle(documentCount: Int, terminalCount: Int) -> String {
-        documentCount == 0 && terminalCount == 0 ? "No Files" : "Open Tabs"
+    /// terminals, browsers or reviews come and go.
+    static func sectionTitle(documentCount: Int, terminalCount: Int, browserCount: Int) -> String {
+        documentCount == 0 && terminalCount == 0 && browserCount == 0 ? "No Files" : "Open Tabs"
     }
 
     private var sectionTitle: String {
@@ -516,7 +587,8 @@ struct TabSidebarView: View {
             return items.count == 1 ? "1 Result" : "\(items.count) Results"
         }
         return Self.sectionTitle(documentCount: store.documents.count,
-                                 terminalCount: store.terminals.count)
+                                 terminalCount: store.terminals.count,
+                                 browserCount: store.browsers.count)
     }
 
     private func filterByLabel(_ name: String) {
@@ -579,6 +651,8 @@ private struct SidebarRow: View {
     var body: some View {
         if let terminal = item.terminal {
             terminalRow(terminal)
+        } else if let browser = item.browser {
+            browserRow(browser)
         } else if let unit = item.workUnit {
             // The search-mode rendering; the tree nests work units through
             // `TabSidebarView.workUnitRow(_:)` instead.
@@ -629,6 +703,48 @@ private struct SidebarRow: View {
             return "Close terminal \(terminal.title)"
         }
         return "Close terminal \(index + 1) of \(store.terminals.count): \(terminal.title)"
+    }
+
+    /// The browser tab row: browser icon, title, address and a close button.
+    private func browserRow(_ browser: BrowserTab) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "safari")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(browser.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(browser.url.absoluteString)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            Button {
+                store.closeBrowser(browser.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close browser tab")
+            .accessibilityLabel(closeLabel(for: browser))
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// Close buttons need names unique per browser tab, mirroring the
+    /// terminal rows: titles are not unique, so the label carries the tab's
+    /// ordinal among the open browsers.
+    private func closeLabel(for browser: BrowserTab) -> String {
+        guard let index = store.browsers.firstIndex(where: { $0.id == browser.id }) else {
+            return "Close browser \(browser.title)"
+        }
+        return "Close browser \(index + 1) of \(store.browsers.count): \(browser.title)"
     }
 
     /// The document tab and search result row.
@@ -714,6 +830,14 @@ private struct SidebarContextMenu: View {
         Button("New Terminal in Worktree") {
             store.openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
         }
+        Button("New Markdown in Worktree") {
+            openNewMarkdown(in: unit)
+        }
+        Button("New Browser in Worktree") {
+            // The unit's pull request is the page a review starts from, so
+            // the new browser tab opens on it; navigation stays in the tab.
+            store.openBrowserTab(url: unit.prURL, workUnitID: unit.id)
+        }
         Divider()
         Button("Reveal Worktree in Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([unit.worktreeURL])
@@ -735,31 +859,38 @@ private struct SidebarContextMenu: View {
         }
     }
 
-    /// The document, terminal and search-result menu.
+    /// The document, terminal, browser and search-result menu.
     @ViewBuilder
     private var tabMenu: some View {
         Button("Open") { open() }
-        if item.terminal == nil {
-            Menu("Labels") { LabelMenuItems(path: item.path) }
-        }
-        Divider()
-        if let document = item.document {
-            Button("Reload from Disk") { store.refresh(document.id) }
-        }
-        Button("Reveal in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
-        }
-        Button("Copy Path") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(item.path, forType: .string)
-        }
-        if let document = item.document {
+        if let browser = item.browser {
+            // A browser tab's row is an address, not a file path, so the
+            // Finder and label actions do not apply to it.
             Divider()
-            Button("Close Tab") { store.close(document.id) }
-        }
-        if let terminal = item.terminal {
+            Button("Close Browser") { store.closeBrowser(browser.id) }
+        } else {
+            if item.terminal == nil {
+                Menu("Labels") { LabelMenuItems(path: item.path) }
+            }
             Divider()
-            Button("Close Terminal") { store.requestCloseTerminal(terminal.id) }
+            if let document = item.document {
+                Button("Reload from Disk") { store.refresh(document.id) }
+            }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
+            }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.path, forType: .string)
+            }
+            if let document = item.document {
+                Divider()
+                Button("Close Tab") { store.close(document.id) }
+            }
+            if let terminal = item.terminal {
+                Divider()
+                Button("Close Terminal") { store.requestCloseTerminal(terminal.id) }
+            }
         }
     }
 
@@ -768,8 +899,25 @@ private struct SidebarContextMenu: View {
             store.selectDocument(document.id)
         } else if let terminal = item.terminal {
             store.selectTerminal(terminal.id)
+        } else if let browser = item.browser {
+            store.selectBrowser(browser.id)
         } else {
             store.open(url: URL(fileURLWithPath: item.path))
+        }
+    }
+
+    /// Creates the unit's next "Untitled" Markdown file; a failure (e.g.
+    /// the worktree was removed) is reported, not swallowed — the user
+    /// asked for a file and got none.
+    private func openNewMarkdown(in unit: WorkUnit) {
+        do {
+            try store.openNewMarkdown(in: unit.worktreeURL, workUnitID: unit.id)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "New Markdown File"
+            alert.informativeText = "The file could not be created in \(unit.worktreePath): \(error.localizedDescription)"
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 }
