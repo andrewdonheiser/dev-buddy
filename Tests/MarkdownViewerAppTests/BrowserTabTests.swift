@@ -294,6 +294,30 @@ struct BrowserTabTests {
         #expect(store.selectedBrowser == nil)
     }
 
+    @Test("links in unknown schemes fail closed instead of launching a handler")
+    func unknownLinkSchemesFailClosed() throws {
+        var openedExternally: [URL] = []
+        let store = DocumentStore(openExternalURL: { url in openedExternally.append(url) },
+                                  labels: LabelStore(storageURL: FileManager.default.temporaryDirectory
+                                      .appendingPathComponent("browser-tests-labels-\(UUID().uuidString).json")))
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let document = try #require(store.selectedDocument)
+
+        // Neither an app scheme that could encode actions in its
+        // parameters, nor a file path, reaches the system handler or
+        // opens a pane — the document may be untrusted Markdown.
+        store.openBrowserTab(forLink: makeURL("ssh://git@example.com/repo"), from: document)
+        store.openBrowserTab(forLink: makeURL("file:///etc/hosts"), from: document)
+
+        #expect(openedExternally.isEmpty)
+        #expect(store.browsers.isEmpty)
+        #expect(store.selectedBrowser == nil)
+    }
+
     @Test("new markdown files are created in the worktree and nest under the unit")
     func newMarkdownNestsUnderUnit() throws {
         let store = makeStore()
@@ -330,6 +354,114 @@ struct BrowserTabTests {
             _ = try store.openNewMarkdown(in: missing)
         }
         #expect(store.documents.isEmpty)
+    }
+
+    @Test("a new terminal follows the visible browser tab's work unit")
+    func newTerminalFollowsVisibleBrowserUnit() async throws {
+        let store = makeStore()
+        defer { store.closeAll() }
+
+        // A git runner that fakes the clone by creating the directories
+        // the real one would, so createReview records a unit without the
+        // network.
+        let reviews = FileManager.default.temporaryDirectory
+            .appendingPathComponent("browser-tests-reviews-\(UUID().uuidString)", isDirectory: true)
+        let workUnits = WorkUnitStore(reviewsDirectory: reviews, git: { arguments, _ in
+            if arguments.first == "clone" {
+                let repository = URL(fileURLWithPath: arguments[4])
+                try? FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+                try? FileManager.default.createDirectory(
+                    at: repository.deletingLastPathComponent()
+                        .appendingPathComponent("worktree", isDirectory: true),
+                    withIntermediateDirectories: true)
+            }
+            return ""
+        })
+        defer { try? FileManager.default.removeItem(at: reviews.deletingLastPathComponent()) }
+
+        let unit = try await workUnits.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12", issueReference: nil)
+        // Selecting a browser tab is what clears the work-unit selection
+        // in the app; the store-level test reproduces that state directly.
+        workUnits.deselect()
+        store.openBrowserTab(url: makeURL("https://github.com/owner/repo/pull/12"),
+                             workUnitID: unit.id)
+
+        let terminal = store.openTerminalInActiveWorkUnit(workUnits: workUnits)
+
+        #expect(terminal.workUnitID == unit.id)
+        #expect(terminal.workingDirectory == unit.worktreeURL)
+        #expect(store.newTerminalHelp(workUnits: workUnits)
+            == "Open a terminal tab in the \(unit.title) worktree")
+    }
+
+    @Test("a saved session restores each document's work-unit nesting")
+    func sessionRestoreKeepsNesting() throws {
+        let defaults = makeScratchDefaults()
+        let store = makeStore()
+        let nested = try makeTempFile("# Nested")
+        let topLevel = try makeTempFile("# Top")
+        defer { try? FileManager.default.removeItem(at: nested) }
+        defer { try? FileManager.default.removeItem(at: topLevel) }
+        defer { store.closeAll() }
+
+        let workUnitID = UUID()
+        store.open(url: nested, workUnitID: workUnitID)
+        store.open(url: topLevel)
+        store.saveSession(defaults: defaults)
+
+        let restored = makeStore()
+        defer { restored.closeAll() }
+        restored.restoreSession(defaults: defaults)
+
+        #expect(restored.documents.count == 2)
+        #expect(restored.documents.first { $0.url.path == nested.path }?.workUnitID == workUnitID)
+        #expect(restored.documents.first { $0.url.path == topLevel.path }?.workUnitID == nil)
+        #expect(restored.selectedDocument?.url.path == topLevel.path)
+    }
+
+    @Test("a saved view restores each document's work-unit nesting")
+    func savedViewRestoreKeepsNesting() throws {
+        let store = makeStore()
+        let nested = try makeTempFile("# Nested")
+        let topLevel = try makeTempFile("# Top")
+        defer { try? FileManager.default.removeItem(at: nested) }
+        defer { try? FileManager.default.removeItem(at: topLevel) }
+        defer { store.closeAll() }
+
+        let workUnitID = UUID()
+        store.open(url: nested, workUnitID: workUnitID)
+        store.open(url: topLevel)
+
+        let view = SavedView(name: "Snapshot",
+                             paths: [nested.path, topLevel.path],
+                             workUnitIDs: [workUnitID.uuidString, nil],
+                             selectedPath: nested.path)
+        store.open(view)
+
+        #expect(store.documents.count == 2)
+        #expect(store.documents.first { $0.url.path == nested.path }?.workUnitID == workUnitID)
+        #expect(store.documents.first { $0.url.path == topLevel.path }?.workUnitID == nil)
+        #expect(store.selectedDocument?.url.path == nested.path)
+    }
+
+    @Test("snapshots saved before nesting existed restore as top-level tabs")
+    func legacySnapshotsDecodeWithoutNesting() throws {
+        let storageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("browser-tests-views-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: storageURL) }
+
+        // The JSON shape saved before work-unit nesting existed, with no
+        // workUnitIDs key at all.
+        try """
+        [{"id":"6E7F8A90-1C2B-4D3E-9A8B-7C6D5E4F3B21","name":"Old","paths":["/tmp/a.md"],"selectedPath":"/tmp/a.md"}]
+        """.write(to: storageURL, atomically: true, encoding: .utf8)
+
+        let savedViews = SavedViewStore(storageURL: storageURL)
+
+        #expect(savedViews.views.count == 1)
+        #expect(savedViews.views[0].name == "Old")
+        #expect(savedViews.views[0].workUnitIDs == nil)
     }
 
     @Test("next and previous tab cycle through documents, terminals and browsers")
@@ -447,8 +579,8 @@ struct BrowserTabTests {
                 created += 1
                 // A blank page keeps the test off the network.
                 return BrowserSession(url: URL(string: "about:blank")!,
-                               initialTitle: tab.title,
-                               onTitleChange: onTitleChange)
+                                      initialTitle: tab.title,
+                                      onTitleChange: onTitleChange)
             },
             labels: LabelStore(storageURL: FileManager.default.temporaryDirectory
                 .appendingPathComponent("browser-tests-labels-\(UUID().uuidString).json")))

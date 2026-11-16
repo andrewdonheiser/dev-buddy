@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WebKit
 
@@ -50,6 +51,14 @@ private struct BrowserPaneContent: View {
             }
         }
         .frame(minWidth: 380, idealWidth: 720, minHeight: 300)
+        .onChange(of: session.loadError) { _, message in
+            guard let message else { return }
+            // The failure overlay replaces the page without moving focus,
+            // so assistive technology needs it announced explicitly — the
+            // same way the review overview announces its errors.
+            AccessibilityNotification.Announcement(
+                "Couldn't load the page. \(message)").post()
+        }
     }
 
     /// The pane's distinct failure state: a failed load leaves the web

@@ -148,7 +148,9 @@ struct ReviewOverviewView: View {
     }
 
     private func openInBrowser() {
-        NSWorkspace.shared.open(unit.prURL)
+        // The same in-app tab "New Browser in Worktree" opens, nested under
+        // the unit — not a second, external routing for the same PR page.
+        store.openBrowserTab(url: unit.prURL, workUnitID: unit.id)
     }
 
     /// Deletes the review: the record and the worktree go first, and its

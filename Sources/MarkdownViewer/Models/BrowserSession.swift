@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import WebKit
 
@@ -36,14 +37,19 @@ final class BrowserSession: NSObject, ObservableObject {
     /// Receives title updates as the page loads, wired by whoever creates
     /// the session — the session never reaches into a store itself.
     private let onTitleChange: (@MainActor (String) -> Void)?
+    /// Where links the page offers in schemes the pane cannot show go —
+    /// injected like the store's link seam, so tests can intercept it.
+    private let openExternalURL: @MainActor (URL) -> Void
     private var observations: [NSKeyValueObservation] = []
 
     init(url: URL,
          initialTitle: String,
-         onTitleChange: (@MainActor (String) -> Void)? = nil) {
+         onTitleChange: (@MainActor (String) -> Void)? = nil,
+         openExternalURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }) {
         self.title = initialTitle
         self.url = url
         self.onTitleChange = onTitleChange
+        self.openExternalURL = openExternalURL
         // JavaScript stays enabled: the browser pane shows real web pages,
         // unlike the Markdown web view, which renders trusted local HTML
         // with it off.
@@ -110,6 +116,30 @@ final class BrowserSession: NSObject, ObservableObject {
 // MARK: - Navigation failures
 
 extension BrowserSession: WKNavigationDelegate {
+
+    /// The pane shows web pages only: navigations to http, https and the
+    /// blank pages the session itself loads stay in-app, and every other
+    /// scheme is cancelled, so a loaded page cannot smuggle a launch of
+    /// an arbitrary registered handler past the link router in
+    /// `DocumentStore`. A user click on a mailto link still reaches the
+    /// system handler, matching what document links do; everything else
+    /// fails closed.
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        switch navigationAction.request.url?.scheme?.lowercased() {
+        case "http", "https", "about":
+            decisionHandler(.allow)
+        case "mailto":
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                openExternalURL(url)
+            }
+            decisionHandler(.cancel)
+        default:
+            decisionHandler(.cancel)
+        }
+    }
 
     /// A committed navigation clears any prior failure: a page (or at
     /// least an interim one) is loading again.

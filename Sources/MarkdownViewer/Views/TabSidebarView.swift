@@ -549,19 +549,27 @@ struct TabSidebarView: View {
         return results
     }
 
-    /// The non-search rows that are not nested under a work unit: documents
-    /// and top-level terminals and browsers, in the chosen order.
+    /// The non-search rows that are not nested under a live work unit:
+    /// documents and top-level terminals and browsers, in the chosen
+    /// order. A tab nested under a unit that has since been deleted —
+    /// possible when a restored session outlives its review — falls back
+    /// to the top-level list instead of disappearing.
     private var openItems: [SidebarItem] {
+        let liveUnitIDs = Set(workUnits.units.map(\.id))
+        func isTopLevel(_ id: WorkUnit.ID?) -> Bool {
+            guard let id else { return true }
+            return !liveUnitIDs.contains(id)
+        }
         var openItems = orderedDocuments
-            .filter { $0.workUnitID == nil }
+            .filter { isTopLevel($0.workUnitID) }
             .map { document in
                 SidebarItem.open(document, labels.labels(containing: document.url.path).map(\.name).sorted())
             }
         openItems += store.terminals
-            .filter { $0.workUnitID == nil }
+            .filter { isTopLevel($0.workUnitID) }
             .map { SidebarItem.terminal($0) }
         openItems += store.browsers
-            .filter { $0.workUnitID == nil }
+            .filter { isTopLevel($0.workUnitID) }
             .map { SidebarItem.browser($0) }
         return openItems
     }

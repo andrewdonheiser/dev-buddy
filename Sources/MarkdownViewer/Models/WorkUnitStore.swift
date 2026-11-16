@@ -189,7 +189,12 @@ final class WorkUnitStore: ObservableObject {
     /// The work unit a terminal belongs to, if it is a nested one.
     func unit(of terminal: TerminalTab) -> WorkUnit? {
         guard let id = terminal.workUnitID else { return nil }
-        return units.first { $0.id == id }
+        return unit(id)
+    }
+
+    /// The work unit with the given id, if it is still recorded.
+    func unit(_ id: WorkUnit.ID) -> WorkUnit? {
+        units.first { $0.id == id }
     }
 
     // MARK: - Archiving and deleting

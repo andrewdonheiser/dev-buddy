@@ -206,16 +206,28 @@ final class DocumentStore: ObservableObject {
     /// the sidebar's New Terminal button both go through it.
     @discardableResult
     func openTerminalInActiveWorkUnit(workUnits: WorkUnitStore) -> TerminalTab {
-        if let unit = workUnits.activeUnit(forSelectedTerminal: selectedTerminal) {
+        if let unit = activeWorkUnit(workUnits) {
             return openTerminal(in: unit.worktreeURL, workUnitID: unit.id)
         }
         return openTerminalTab()
     }
 
+    /// The unit a new terminal belongs to: the selected one, the unit the
+    /// visible terminal is nested in, or — like a terminal, a browser tab
+    /// showing means its unit is the nested world on screen — the unit the
+    /// visible browser tab is nested in.
+    private func activeWorkUnit(_ workUnits: WorkUnitStore) -> WorkUnit? {
+        if let unit = workUnits.activeUnit(forSelectedTerminal: selectedTerminal) {
+            return unit
+        }
+        guard let id = selectedBrowser?.workUnitID else { return nil }
+        return workUnits.unit(id)
+    }
+
     /// Tooltip text describing where `openTerminalInActiveWorkUnit(workUnits:)`
     /// opens its terminal — the same rule, described once for both callers.
     func newTerminalHelp(workUnits: WorkUnitStore) -> String {
-        if let unit = workUnits.activeUnit(forSelectedTerminal: selectedTerminal) {
+        if let unit = activeWorkUnit(workUnits) {
             return "Open a terminal tab in the \(unit.title) worktree"
         }
         if selectedDocument != nil {
@@ -303,16 +315,20 @@ final class DocumentStore: ObservableObject {
         return browser
     }
 
-    /// Opens a link from `document` in an in-app browser tab instead of an
-    /// external browser: web pages nest under the document's review work
-    /// unit when the document is nested in one, and open top-level
-    /// otherwise. Links the browser pane cannot show (mailto:, etc.) still
-    /// go to the system handler.
+    /// Opens a link from `document`: web pages in an in-app browser tab
+    /// nested under the document's review work unit (top-level when the
+    /// document is not nested), and mailto links in the user's mail
+    /// client. Every other scheme fails closed — the click does nothing
+    /// rather than launching an arbitrary registered handler, since the
+    /// document may be untrusted Markdown under review.
     func openBrowserTab(forLink url: URL, from document: OpenDocument) {
-        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+        switch url.scheme?.lowercased() {
+        case "http", "https":
             openBrowserTab(url: url, workUnitID: document.workUnitID)
-        } else {
+        case "mailto":
             openExternalURL(url)
+        default:
+            break
         }
     }
 
@@ -562,23 +578,31 @@ final class DocumentStore: ObservableObject {
 
     // MARK: - Saved views
 
-    /// Snapshots the open tab list into a named, restorable view.
+    /// Snapshots the open tab list into a named, restorable view, keeping
+    /// each document's work-unit nesting.
     @discardableResult
     func saveCurrentView(named name: String) -> SavedView? {
         SavedViewStore.shared.save(
             name: name,
             paths: documents.map { $0.url.path },
+            workUnitIDs: documents.map { $0.workUnitID?.uuidString },
             selectedPath: selectedDocument?.url.path
         )
     }
 
     /// Replaces the document tab list with a saved view's files, skipping
-    /// files that no longer exist on disk. Terminal tabs stay open: closing
-    /// them would terminate their shells without the confirmation every
-    /// other close path uses.
+    /// files that no longer exist on disk and restoring each document's
+    /// work-unit nesting. Terminal tabs stay open: closing them would
+    /// terminate their shells without the confirmation every other close
+    /// path uses.
     func open(_ view: SavedView) {
         closeAllDocuments()
-        open(urls: view.paths.map { URL(fileURLWithPath: $0) })
+        let unitIDs = view.workUnitIDs ?? []
+        for (index, path) in view.paths.enumerated() {
+            let unitID = index < unitIDs.count ? unitIDs[index] : nil
+            open(url: URL(fileURLWithPath: path),
+                 workUnitID: unitID.flatMap(UUID.init(uuidString:)))
+        }
         if let selectedPath = view.selectedPath,
            let match = documents.first(where: { $0.url.path == selectedPath }) {
             selectDocument(match.id)
@@ -682,36 +706,50 @@ final class DocumentStore: ObservableObject {
     private enum SessionKeys {
         static let saveOnExit = "saveFilesOnExit"
         static let openPaths = "savedOpenFilePaths"
+        static let openWorkUnitIDs = "savedOpenFileWorkUnitIDs"
         static let selectedPath = "savedSelectedFilePath"
     }
 
     /// Whether the user wants the set of open files remembered on exit.
     var savesFilesOnExit: Bool {
-        let defaults = UserDefaults.standard
+        savesFilesOnExit(in: UserDefaults.standard)
+    }
+
+    private func savesFilesOnExit(in defaults: UserDefaults) -> Bool {
         guard defaults.object(forKey: SessionKeys.saveOnExit) != nil else { return true }
         return defaults.bool(forKey: SessionKeys.saveOnExit)
     }
 
-    /// Persists the currently open files so they can be restored on next launch.
-    func saveSession() {
-        let defaults = UserDefaults.standard
-        guard savesFilesOnExit else {
+    /// Persists the currently open files — and, alongside them, the review
+    /// work unit each is nested under — so they can be restored on next
+    /// launch. The unit ids ride in a parallel array; an empty string
+    /// marks a top-level document.
+    func saveSession(defaults: UserDefaults = .standard) {
+        guard savesFilesOnExit(in: defaults) else {
             defaults.removeObject(forKey: SessionKeys.openPaths)
+            defaults.removeObject(forKey: SessionKeys.openWorkUnitIDs)
             defaults.removeObject(forKey: SessionKeys.selectedPath)
             return
         }
         defaults.set(documents.map { $0.url.path }, forKey: SessionKeys.openPaths)
+        defaults.set(documents.map { $0.workUnitID?.uuidString ?? "" },
+                     forKey: SessionKeys.openWorkUnitIDs)
         defaults.set(selectedDocument?.url.path, forKey: SessionKeys.selectedPath)
     }
 
-    /// Reopens the files saved by a previous session, respecting the setting.
-    func restoreSession() {
-        guard savesFilesOnExit else { return }
-        let defaults = UserDefaults.standard
+    /// Reopens the files saved by a previous session, respecting the
+    /// setting and each document's work-unit nesting.
+    func restoreSession(defaults: UserDefaults = .standard) {
+        guard savesFilesOnExit(in: defaults) else { return }
         guard let paths = defaults.stringArray(forKey: SessionKeys.openPaths), !paths.isEmpty else {
             return
         }
-        open(urls: paths.map { URL(fileURLWithPath: $0) })
+        let unitIDs = defaults.stringArray(forKey: SessionKeys.openWorkUnitIDs) ?? []
+        for (index, path) in paths.enumerated() {
+            let unitID = index < unitIDs.count ? unitIDs[index] : nil
+            open(url: URL(fileURLWithPath: path),
+                 workUnitID: unitID.flatMap(UUID.init(uuidString:)))
+        }
         if let selectedPath = defaults.string(forKey: SessionKeys.selectedPath),
            let match = documents.first(where: { $0.url.path == selectedPath }) {
             selectDocument(match.id)
