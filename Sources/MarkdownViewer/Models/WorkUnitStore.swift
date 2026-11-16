@@ -8,6 +8,9 @@ enum ReviewError: LocalizedError, Equatable {
     /// Git could not clone the repository or create the worktree; the
     /// associated value is git's own message.
     case worktreeCreationFailed(String)
+    /// A raw git command failed; the values are its exit status and its
+    /// combined output, shown to the user verbatim.
+    case gitFailed(exitStatus: Int, output: String)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +18,8 @@ enum ReviewError: LocalizedError, Equatable {
             "That is not a GitHub pull request URL. Use the PR's own address, e.g. https://github.com/owner/repo/pull/123."
         case .worktreeCreationFailed(let message):
             "The pull request could not be checked out into a worktree. \(message)"
+        case .gitFailed(let exitStatus, let output):
+            "A git command failed (exit status \(exitStatus)). \(output)"
         }
     }
 }
@@ -40,6 +45,10 @@ final class WorkUnitStore: ObservableObject {
     /// the user needs to know their reviews were not read and that the
     /// unreadable file was kept on disk rather than replaced.
     @Published private(set) var loadFailure: String?
+    /// Why the review records could not be saved, if a save failed: the
+    /// user needs to know their reviews will not survive a relaunch even
+    /// though they remain open now.
+    @Published private(set) var saveFailure: String?
 
     /// Runs one git command — arguments plus the directory to run it in —
     /// returning its output. Injectable so tests can fake worktree creation
@@ -53,10 +62,11 @@ final class WorkUnitStore: ObservableObject {
     private let storageURL: URL
     private let fileManager = FileManager.default
     private let now: () -> Date
-    /// True when an unreadable record file could not be rotated aside:
-    /// writing a new one would destroy it, so persistence is withheld
-    /// until the user resolves the situation.
-    private let withholdPersistence: Bool
+    /// True while an unreadable record file that could not be rotated
+    /// aside is still in place: writing a new one would destroy it, so
+    /// persistence stays withheld. Re-checked on every save, so resolving
+    /// the file resumes saving without a relaunch.
+    private var persistenceWithheld: Bool
 
     init(reviewsDirectory: URL = WorkUnitStore.defaultReviewsDirectory,
          git: @escaping GitRunner = { arguments, directory in
@@ -72,7 +82,7 @@ final class WorkUnitStore: ObservableObject {
         let records = WorkUnitStore.load(from: storageURL)
         self.units = records.units
         self.loadFailure = records.failure
-        self.withholdPersistence = records.unreadableFileWasLeftInPlace
+        self.persistenceWithheld = records.unreadableFileWasLeftInPlace
     }
 
     nonisolated static var defaultReviewsDirectory: URL {
@@ -96,9 +106,13 @@ final class WorkUnitStore: ObservableObject {
             throw ReviewError.invalidPullRequestURL
         }
         // A unique directory per unit, so the same PR can be reviewed again
-        // without colliding with an earlier review's worktree.
+        // without colliding with an earlier review's worktree. The
+        // repository slug's "/" is flattened to "-" so each unit is a
+        // single component under Reviews (a nested one would leave an
+        // empty owner folder behind on delete); `parse(url:)` has already
+        // constrained the slug to filesystem-safe characters.
         let unitDirectory = reviewsDirectory
-            .appendingPathComponent("\(pr.repository)-\(pr.number)-\(UUID().uuidString.prefix(8))",
+            .appendingPathComponent("\(pr.repository.replacingOccurrences(of: "/", with: "-"))-\(pr.number)-\(UUID().uuidString.prefix(8))",
                                     isDirectory: true)
         let issue = issueReference?.trimmingCharacters(in: .whitespacesAndNewlines)
         let runner = git
@@ -131,6 +145,10 @@ final class WorkUnitStore: ObservableObject {
             _ = try git(["fetch", "--quiet", "origin", "pull/\(pr.number)/head"], repository)
             _ = try git(["worktree", "add", worktree.path, "FETCH_HEAD"], repository)
             return worktree
+        } catch let error as ReviewError {
+            // A typed git failure already carries its user-facing message.
+            try? FileManager.default.removeItem(at: unitDirectory)
+            throw error
         } catch {
             try? FileManager.default.removeItem(at: unitDirectory)
             throw ReviewError.worktreeCreationFailed(error.localizedDescription)
@@ -152,8 +170,7 @@ final class WorkUnitStore: ObservableObject {
         process.waitUntilExit()
         let output = String(data: data, encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {
-            throw NSError(domain: "WorkUnitStore.git", code: Int(process.terminationStatus),
-                          userInfo: [NSLocalizedDescriptionKey: output])
+            throw ReviewError.gitFailed(exitStatus: Int(process.terminationStatus), output: output)
         }
         return output
     }
@@ -228,7 +245,7 @@ final class WorkUnitStore: ObservableObject {
         // record happens to contain. A directory that is already gone
         // still lets the record be deleted.
         let unitDirectory = unit.worktreeURL.deletingLastPathComponent()
-        if unitDirectory.path.hasPrefix(reviewsDirectory.path),
+        if isManagedUnitDirectory(unitDirectory),
            fileManager.fileExists(atPath: unitDirectory.path) {
             try fileManager.removeItem(at: unitDirectory)
         }
@@ -237,12 +254,52 @@ final class WorkUnitStore: ObservableObject {
         persist()
     }
 
+    /// Whether `directory` is one this store may remove: a direct child of
+    /// the managed reviews folder whose name createReview generated — or,
+    /// for units created before the slug was flattened, the generated
+    /// folder inside its owner folder. Records can be tampered with, so
+    /// the shape on disk, not the record, decides what delete removes.
+    private func isManagedUnitDirectory(_ directory: URL) -> Bool {
+        let reviewsPath = reviewsDirectory.standardizedFileURL.path
+        let directoryPath = directory.standardizedFileURL.path
+        // Containment with a component boundary, so a sibling sharing the
+        // prefix (Reviews-backup) does not match.
+        guard directoryPath.hasPrefix(reviewsPath + "/") else { return false }
+        let components = directoryPath.dropFirst(reviewsPath.count + 1)
+            .split(separator: "/")
+        switch components.count {
+        case 1:
+            return Self.isGeneratedUnitDirectoryName(String(components[0]))
+        case 2:
+            // The legacy layout: <owner>/<owner>-<repo>-<number>-<id>.
+            return PullRequest.isValidName(String(components[0]))
+                && Self.isGeneratedUnitDirectoryName(String(components[1]))
+        default:
+            return false
+        }
+    }
+
+    /// Whether `name` matches the `<slug>-<number>-<uuid prefix>` shape
+    /// createReview generates, e.g. `owner-repo-12-1A2B3C4D`.
+    nonisolated static func isGeneratedUnitDirectoryName(_ name: String) -> Bool {
+        let parts = name.split(separator: "-")
+        guard parts.count >= 4,
+              let number = Int(parts[parts.count - 2]), number > 0 else { return false }
+        let uuidPrefix = parts[parts.count - 1]
+        return uuidPrefix.count == 8 && uuidPrefix.allSatisfy(\.isHexDigit)
+    }
+
     // MARK: - Persistence
 
     private func persist() {
         // An unreadable record file that could not be rotated aside must
-        // not be overwritten — the saved reviews stay recoverable on disk.
-        guard !withholdPersistence else { return }
+        // not be overwritten — but the user may resolve it while the app
+        // runs, so every save re-checks instead of staying withheld for
+        // the whole session.
+        if persistenceWithheld {
+            retryReadingWithheldRecords()
+        }
+        guard !persistenceWithheld else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -250,8 +307,28 @@ final class WorkUnitStore: ObservableObject {
             try fileManager.createDirectory(at: storageURL.deletingLastPathComponent(),
                                             withIntermediateDirectories: true)
             try encoder.encode(units).write(to: storageURL, options: .atomic)
+            saveFailure = nil
         } catch {
-            // Persistence is best-effort; in-memory state remains authoritative.
+            // In-memory state remains authoritative, but a user whose
+            // reviews silently stop being saved gets no signal — report
+            // it the way load failures are reported.
+            saveFailure = "Reviews could not be saved: \(error.localizedDescription) They remain open, but will not be restored on relaunch until saving works."
+        }
+    }
+
+    /// Re-reads the record file that blocked persistence: the user may
+    /// have removed or repaired it while the app was running. A file that
+    /// is gone, or that can now be read, unblocks persistence — and units
+    /// recovered from a repaired file join the in-memory list instead of
+    /// being overwritten by it.
+    private func retryReadingWithheldRecords() {
+        let records = Self.load(from: storageURL)
+        persistenceWithheld = records.unreadableFileWasLeftInPlace
+        loadFailure = records.failure
+        guard !persistenceWithheld else { return }
+        let known = Set(units.map(\.id))
+        for unit in records.units where !known.contains(unit.id) {
+            units.append(unit)
         }
     }
 
@@ -266,7 +343,18 @@ final class WorkUnitStore: ObservableObject {
     }
 
     private static func load(from url: URL) -> LoadedRecords {
-        guard let data = try? Data(contentsOf: url) else { return LoadedRecords() }
+        let fileManager = FileManager.default
+        // A missing file is an empty store; an existing file that cannot
+        // be read is not — overwriting it would destroy whatever it
+        // holds, so it goes through the same rotate-aside path as an
+        // undecodable one.
+        guard fileManager.fileExists(atPath: url.path) else { return LoadedRecords() }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return Self.setAsideUnreadableRecords(at: url, fileManager: fileManager)
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
@@ -274,26 +362,33 @@ final class WorkUnitStore: ObservableObject {
             records.units = try decoder.decode([WorkUnit].self, from: data)
             return records
         } catch {
-            // A record file that cannot be decoded must not be silently
-            // discarded: starting from an empty store would let the next
-            // persist() overwrite it, permanently destroying every review
-            // record while the worktrees live on. Rotate it aside so the
-            // records stay recoverable, and say so — an empty sidebar with
-            // no explanation reads as if the reviews never existed.
-            let fileManager = FileManager.default
-            let rotated = url.deletingLastPathComponent()
-                .appendingPathComponent("reviews-unreadable-\(Int(Date().timeIntervalSince1970)).json")
-            var records = LoadedRecords()
-            do {
-                try fileManager.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-                try fileManager.moveItem(at: url, to: rotated)
-                records.failure = "Saved reviews could not be read. The unreadable record file was kept as \(rotated.lastPathComponent) beside reviews.json so it can be recovered."
-            } catch {
-                records.unreadableFileWasLeftInPlace = true
-                records.failure = "Saved reviews could not be read, and the unreadable record file could not be set aside. It was left untouched so it can be recovered; reviews will not be saved until it is resolved."
-            }
-            return records
+            return Self.setAsideUnreadableRecords(at: url, fileManager: fileManager)
         }
+    }
+
+    /// Rotates an unreadable record file aside so it is not overwritten,
+    /// telling the user what was kept; when even that fails, marks the
+    /// records as one persistence must not touch.
+    private static func setAsideUnreadableRecords(at url: URL,
+                                                  fileManager: FileManager) -> LoadedRecords {
+        // A record file that cannot be read must not be silently
+        // discarded: starting from an empty store would let the next
+        // persist() overwrite it, permanently destroying every review
+        // record while the worktrees live on. Rotate it aside so the
+        // records stay recoverable, and say so — an empty sidebar with
+        // no explanation reads as if the reviews never existed.
+        let rotated = url.deletingLastPathComponent()
+            .appendingPathComponent("reviews-unreadable-\(Int(Date().timeIntervalSince1970)).json")
+        var records = LoadedRecords()
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(),
+                                            withIntermediateDirectories: true)
+            try fileManager.moveItem(at: url, to: rotated)
+            records.failure = "Saved reviews could not be read. The unreadable record file was kept as \(rotated.lastPathComponent) beside reviews.json so it can be recovered."
+        } catch {
+            records.unreadableFileWasLeftInPlace = true
+            records.failure = "Saved reviews could not be read, and the unreadable record file could not be set aside. It was left untouched so it can be recovered; reviews will not be saved until it is resolved."
+        }
+        return records
     }
 }

@@ -60,15 +60,13 @@ struct ReviewWizardView: View {
         .frame(width: 440)
     }
 
-    /// Validates the input, creates the work unit, then opens the PR in the
-    /// browser and a terminal in its worktree.
+    /// Creates the work unit from the input — `createReview` is the one
+    /// place the URL is validated, so an invalid one surfaces as its
+    /// thrown error — then opens the PR in the browser and a terminal in
+    /// its worktree.
     @MainActor
     private func create() async {
         errorMessage = nil
-        guard PullRequest.parse(url: prURLString) != nil else {
-            showError(ReviewError.invalidPullRequestURL.errorDescription)
-            return
-        }
         isCreating = true
         do {
             let unit = try await workUnits.createReview(prURLString: prURLString,

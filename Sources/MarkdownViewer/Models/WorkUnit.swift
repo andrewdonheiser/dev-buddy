@@ -29,18 +29,37 @@ struct PullRequest: Equatable {
         let repository = parts[1].lowercased().hasSuffix(".git")
             ? String(parts[1].dropLast(4))
             : parts[1]
+        // Path components arrive percent-decoded, so a pasted slug can
+        // contain characters GitHub never allows (spaces, encoded slashes,
+        // "..") — and everything later built from the slug (the PR URL,
+        // the clone URL, the unit's directory name) assumes it cannot.
+        // Reject anything outside GitHub's own name alphabet.
+        guard Self.isValidName(parts[0]), Self.isValidName(repository) else { return nil }
         return PullRequest(repository: "\(parts[0])/\(repository)", number: number)
+    }
+
+    /// The characters GitHub allows in owner and repository names.
+    private static let nameCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+    /// Whether `name` is a possible GitHub owner or repository name. This
+    /// is also the guarantee that keeps the URLs and directory names built
+    /// from a parsed slug well-formed.
+    static func isValidName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".."
+            && name.unicodeScalars.allSatisfy { nameCharacters.contains($0) }
     }
 
     /// The canonical `https` URL of the PR, for opening in the browser.
     var url: URL {
-        // The repository slug and number are constrained by `parse(url:)`,
-        // so this string is always a valid URL.
+        // `parse(url:)` rejects names outside GitHub's alphabet, so the
+        // interpolated slug is always URL-safe and this cannot be nil.
         URL(string: "https://github.com/\(repository)/pull/\(number)")!
     }
 
     /// The URL the repository is cloned from.
     var cloneURL: URL {
+        // Same guarantee as `url`: the slug is name-alphabet only.
         URL(string: "https://github.com/\(repository).git")!
     }
 

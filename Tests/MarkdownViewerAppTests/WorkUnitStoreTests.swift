@@ -96,6 +96,22 @@ struct PullRequestTests {
             #expect(PullRequest.parse(url: string) == nil, "expected \(string) to be rejected")
         }
     }
+
+    @Test("rejects slugs GitHub names cannot contain")
+    func rejectsInvalidSlugs() {
+        // Path components arrive percent-decoded, so a pasted URL can
+        // smuggle characters GitHub never allows past the shape checks.
+        for string in ["https://github.com/owner/repo%20name/pull/1",
+                       "https://github.com/owner%2Fevil/repo/pull/1",
+                       "https://github.com/owner/rep%2Fo/pull/1",
+                       "https://github.com/../repo/pull/1",
+                       "https://github.com/./repo/pull/1",
+                       "https://github.com/owner/../pull/1"] {
+            #expect(PullRequest.parse(url: string) == nil, "expected \(string) to be rejected")
+        }
+        // Names in GitHub's alphabet — dots, dashes, underscores — parse.
+        #expect(PullRequest.parse(url: "https://github.com/my.team/my_repo-v2/pull/1") != nil)
+    }
 }
 
 @Suite("Review work units")
@@ -118,6 +134,12 @@ struct WorkUnitStoreTests {
         // The worktree lives under the managed reviews folder and exists.
         #expect(unit.worktreePath.hasPrefix(fixture.reviewsDirectory.path))
         #expect(FileManager.default.fileExists(atPath: unit.worktreePath))
+        // The unit directory is a single generated component directly
+        // under Reviews — not an owner folder nesting it one level deeper.
+        let unitDirectory = unit.worktreeURL.deletingLastPathComponent()
+        #expect(unitDirectory.deletingLastPathComponent().standardizedFileURL.path
+            == fixture.reviewsDirectory.standardizedFileURL.path)
+        #expect(WorkUnitStore.isGeneratedUnitDirectoryName(unitDirectory.lastPathComponent))
         // The unit is in the store and selected.
         #expect(fixture.store.units.map(\.id) == [unit.id])
         #expect(fixture.store.selectedWorkUnitID == unit.id)
@@ -247,7 +269,7 @@ struct WorkUnitStoreTests {
         // the unit directory itself to unlink the clone and worktree inside
         // it, so the worktree's contents survive the failure intact. (The
         // reviews folder's own permissions never gate the removal — the
-        // unit directory is two levels below it.)
+        // unit directory is a child of it, not the folder itself.)
         let unitDirectory = unit.worktreeURL.deletingLastPathComponent()
         try FileManager.default.setAttributes([.posixPermissions: 0o555],
                                               ofItemAtPath: unitDirectory.path)
@@ -377,6 +399,223 @@ struct WorkUnitStoreTests {
         #expect(fixture.store.selectedWorkUnitID == nil)
 
         try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+    }
+
+    @Test("a typed git failure propagates with its exit status and output")
+    func typedGitFailurePropagates() async throws {
+        let fixture = WorkUnitFixture()
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory) { _, _ in
+            throw ReviewError.gitFailed(exitStatus: 128, output: "fatal: repository not found")
+        }
+
+        await #expect(throws: ReviewError.gitFailed(exitStatus: 128,
+                                                    output: "fatal: repository not found")) {
+            _ = try await store.createReview(prURLString: "https://github.com/owner/repo/pull/12",
+                                             issueReference: nil)
+        }
+        // The half-created unit directory was cleaned up, and nothing was
+        // recorded.
+        #expect(store.units.isEmpty)
+        let leftovers = (try? FileManager.default.contentsOfDirectory(
+            atPath: fixture.reviewsDirectory.path)) ?? []
+        #expect(leftovers.isEmpty)
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+    }
+
+    @Test("a record pointing outside the managed folder deletes only the record")
+    func tamperedRecordDoesNotRemoveOutsideDirectories() async throws {
+        let fixture = WorkUnitFixture()
+        let unit = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
+
+        // Tamper with the saved record the way a hand-edited reviews.json
+        // would: the worktree now claims to live outside the managed
+        // folder entirely.
+        let outside = fixture.reviewsDirectory.deletingLastPathComponent()
+            .appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
+        let outsideWorktree = outside.appendingPathComponent("worktree", isDirectory: true)
+        try FileManager.default.createDirectory(at: outsideWorktree, withIntermediateDirectories: true)
+        try "keep".write(to: outside.appendingPathComponent("keep.txt"),
+                         atomically: true, encoding: .utf8)
+        try Self.retargetWorktree(in: fixture.storageURL,
+                                  from: unit.worktreePath, to: outsideWorktree.path)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+        try store.delete(try #require(store.units.first).id)
+
+        #expect(store.units.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("keep.txt").path))
+
+        try? FileManager.default.removeItem(at: outside)
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
+    }
+
+    @Test("a sibling folder sharing the Reviews prefix is not managed")
+    func siblingPrefixIsNotManaged() async throws {
+        let fixture = WorkUnitFixture()
+        let unit = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
+
+        // Reviews-backup shares the Reviews prefix but is not the managed
+        // folder; a tampered record must not make delete reach into it.
+        let sibling = fixture.reviewsDirectory.deletingLastPathComponent()
+            .appendingPathComponent("Reviews-backup", isDirectory: true)
+            .appendingPathComponent("owner-repo-12-1A2B3C4D", isDirectory: true)
+        let siblingWorktree = sibling.appendingPathComponent("worktree", isDirectory: true)
+        try FileManager.default.createDirectory(at: siblingWorktree, withIntermediateDirectories: true)
+        try "keep".write(to: sibling.appendingPathComponent("keep.txt"),
+                         atomically: true, encoding: .utf8)
+        try Self.retargetWorktree(in: fixture.storageURL,
+                                  from: unit.worktreePath, to: siblingWorktree.path)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+        try store.delete(try #require(store.units.first).id)
+
+        #expect(store.units.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: sibling.appendingPathComponent("keep.txt").path))
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+    }
+
+    @Test("units from the legacy nested layout are still removed on delete")
+    func legacyNestedLayoutStillDeleted() async throws {
+        let fixture = WorkUnitFixture()
+        let unit = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
+
+        // The layout before the slug was flattened: the generated unit
+        // folder nested inside an owner folder.
+        let legacyDirectory = fixture.reviewsDirectory
+            .appendingPathComponent("owner", isDirectory: true)
+            .appendingPathComponent("owner-repo-12-1A2B3C4D", isDirectory: true)
+        let legacyWorktree = legacyDirectory.appendingPathComponent("worktree", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyWorktree, withIntermediateDirectories: true)
+        try Self.retargetWorktree(in: fixture.storageURL,
+                                  from: unit.worktreePath, to: legacyWorktree.path)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+        try store.delete(try #require(store.units.first).id)
+
+        #expect(store.units.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: legacyDirectory.path))
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+    }
+
+    @Test("an existing but unreadable record file is set aside, not overwritten")
+    func unreadableRecordsAreSetAside() async throws {
+        let fixture = WorkUnitFixture()
+        try FileManager.default.createDirectory(at: fixture.storageURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "not json".data(using: .utf8)!.write(to: fixture.storageURL)
+        // No read permission makes the read itself fail, the way a locked
+        // file would.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000],
+                                              ofItemAtPath: fixture.storageURL.path)
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+        #expect(store.units.isEmpty)
+        #expect(store.loadFailure != nil)
+
+        // The file was rotated aside, not overwritten: the original bytes
+        // survive under the rotated name.
+        let directory = fixture.storageURL.deletingLastPathComponent().path
+        let rotated = ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+            .first { $0.hasPrefix("reviews-unreadable-") }
+        #expect(rotated != nil)
+        if let rotated {
+            try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                  ofItemAtPath: fixture.storageURL.deletingLastPathComponent()
+                                                      .appendingPathComponent(rotated).path)
+            let contents = try String(contentsOf: fixture.storageURL.deletingLastPathComponent()
+                .appendingPathComponent(rotated), encoding: .utf8)
+            #expect(contents.contains("not json"))
+        }
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+    }
+
+    @Test("resolving the blocked record file resumes saving without a relaunch")
+    func withheldPersistenceRecovers() async throws {
+        let fixture = WorkUnitFixture()
+        let first = try await fixture.store.createReview(
+            prURLString: "https://github.com/owner/repo/pull/12",
+            issueReference: nil)
+
+        // A record file that can neither be read nor rotated aside blocks
+        // persistence.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000],
+                                              ofItemAtPath: fixture.storageURL.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555],
+                                              ofItemAtPath: fixture.storageURL.deletingLastPathComponent().path)
+        let blocked = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory,
+                                    git: { _, _ in "" })
+        #expect(blocked.loadFailure != nil)
+
+        // Nothing the blocked store does may overwrite the file.
+        _ = try await blocked.createReview(prURLString: "https://github.com/owner/repo/pull/13",
+                                           issueReference: nil)
+        #expect(blocked.units.count == 1)
+
+        // The user fixes the file: readable again, and the records folder
+        // writable.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: fixture.storageURL.deletingLastPathComponent().path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                              ofItemAtPath: fixture.storageURL.path)
+
+        // The next save re-checks, recovers the saved records, and writes
+        // both reviews.
+        _ = try await blocked.createReview(prURLString: "https://github.com/owner/repo/pull/14",
+                                           issueReference: nil)
+        #expect(blocked.units.count == 3)
+        #expect(blocked.loadFailure == nil)
+        let reopened = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+        #expect(reopened.units.count == 3)
+        #expect(reopened.units.map(\.id).contains(first.id))
+
+        try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+    }
+
+    @Test("a failed save is reported instead of swallowed")
+    func failedSaveIsReported() async throws {
+        let fixture = WorkUnitFixture()
+        // A read-only records folder makes the write fail while the store
+        // keeps working in memory.
+        try FileManager.default.createDirectory(at: fixture.storageURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555],
+                                              ofItemAtPath: fixture.storageURL.deletingLastPathComponent().path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: fixture.storageURL.deletingLastPathComponent().path)
+            try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
+        }
+
+        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+        _ = try await store.createReview(prURLString: "https://github.com/owner/repo/pull/12",
+                                         issueReference: nil)
+
+        #expect(store.units.count == 1)
+        #expect(store.saveFailure != nil)
+        #expect(!FileManager.default.fileExists(atPath: fixture.storageURL.path))
+    }
+
+    /// Rewrites the saved record's worktree path. JSON escapes "/" as
+    /// "\/", so both paths are escaped before the text replacement.
+    private static func retargetWorktree(in storageURL: URL,
+                                         from oldPath: String, to newPath: String) throws {
+        func jsonEscaped(_ path: String) -> String {
+            path.replacingOccurrences(of: "/", with: "\\/")
+        }
+        try String(contentsOf: storageURL, encoding: .utf8)
+            .replacingOccurrences(of: jsonEscaped(oldPath), with: jsonEscaped(newPath))
+            .write(to: storageURL, atomically: true, encoding: .utf8)
     }
 }
 
