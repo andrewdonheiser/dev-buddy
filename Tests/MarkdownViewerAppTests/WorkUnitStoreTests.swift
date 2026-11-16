@@ -527,10 +527,10 @@ struct SelectionPrecedenceTests {
             fixture.store.select(unit.id)
             store.open(url: nestedURL, workUnitID: unit.id)
             let nestedDocument = try #require(store.documents.first { $0.url == nestedURL })
-            let browser = store.openBrowserTab(forLink: URL(string: "https://github.com/owner/repo/pull/12")!,
-                                               from: nestedDocument)
+            store.openBrowserTab(forLink: URL(string: "https://github.com/owner/repo/pull/12")!,
+                                 from: nestedDocument)
+            let browser = try #require(store.selectedBrowser)
 
-            #expect(store.selectedBrowser?.id == browser.id)
             #expect(browser.workUnitID == unit.id)
             #expect(fixture.store.selectedWorkUnitID == nil)
         }

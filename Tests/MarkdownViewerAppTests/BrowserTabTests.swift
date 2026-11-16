@@ -446,7 +446,7 @@ struct BrowserTabTests {
             browserSessionFactory: { tab, onTitleChange in
                 created += 1
                 // A blank page keeps the test off the network.
-                BrowserSession(url: URL(string: "about:blank")!,
+                return BrowserSession(url: URL(string: "about:blank")!,
                                initialTitle: tab.title,
                                onTitleChange: onTitleChange)
             },
