@@ -497,7 +497,7 @@ struct SelectionPrecedenceTests {
             try? FileManager.default.removeItem(at: fixture.reviewsDirectory)
         }
 
-        withExtendedLifetime(coordinator) {
+        try withExtendedLifetime(coordinator) {
             // The wizard's unit is selected; its overview owns the detail
             // column.
             #expect(fixture.store.selectedWorkUnitID == unit.id)
