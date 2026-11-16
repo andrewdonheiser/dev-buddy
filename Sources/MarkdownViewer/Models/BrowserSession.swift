@@ -49,6 +49,9 @@ final class BrowserSession: NSObject, ObservableObject {
         // with it off.
         self.view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         view.allowsBackForwardNavigationGestures = true
+        // `self` cannot escape init (delegate, KVO) until NSObject is fully
+        // initialized, so the uses below wait for `super.init()`.
+        super.init()
         view.navigationDelegate = self
         view.load(URLRequest(url: url))
         observePageState()
