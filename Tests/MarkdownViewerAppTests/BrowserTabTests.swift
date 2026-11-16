@@ -363,9 +363,14 @@ struct BrowserTabTests {
 
         // A git runner that fakes the clone by creating the directories
         // the real one would, so createReview records a unit without the
-        // network.
-        let reviews = FileManager.default.temporaryDirectory
-            .appendingPathComponent("browser-tests-reviews-\(UUID().uuidString)", isDirectory: true)
+        // network. The reviews folder sits inside its own UUID-scoped
+        // parent, mirroring WorkUnitFixture: the store writes reviews.json
+        // next to the reviews folder, and the cleanup removes only that
+        // parent — never the shared temporary directory itself, which the
+        // concurrently running tests keep their scratch state in.
+        let reviewsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("browser-tests-units-\(UUID().uuidString)", isDirectory: true)
+        let reviews = reviewsRoot.appendingPathComponent("Reviews", isDirectory: true)
         let workUnits = WorkUnitStore(reviewsDirectory: reviews, git: { arguments, _ in
             if arguments.first == "clone" {
                 let repository = URL(fileURLWithPath: arguments[4])
@@ -377,7 +382,7 @@ struct BrowserTabTests {
             }
             return ""
         })
-        defer { try? FileManager.default.removeItem(at: reviews.deletingLastPathComponent()) }
+        defer { try? FileManager.default.removeItem(at: reviewsRoot) }
 
         let unit = try await workUnits.createReview(
             prURLString: "https://github.com/owner/repo/pull/12", issueReference: nil)
