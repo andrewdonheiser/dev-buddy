@@ -464,7 +464,7 @@ final class DocumentStore: ObservableObject {
                 // With no documents left, fall back to a terminal tab when
                 // one is open, then to a browser tab — without displacing a
                 // pane that is already selected and visible.
-                if selectedTerminalID == nil {
+                if selectedTerminalID == nil && selectedBrowserID == nil {
                     selectedTerminalID = terminals.first?.id
                 }
                 if selectedTerminalID == nil && selectedBrowserID == nil {
@@ -523,7 +523,9 @@ final class DocumentStore: ObservableObject {
         watchers = [:]
         documents = []
         selectedID = nil
-        if selectedTerminalID == nil {
+        // The same fallback rule `close(_:)` applies: a visible browser
+        // pane keeps the column over the terminal fallback.
+        if selectedTerminalID == nil && selectedBrowserID == nil {
             selectedTerminalID = terminals.first?.id
         }
         if selectedTerminalID == nil && selectedBrowserID == nil {

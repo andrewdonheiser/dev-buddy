@@ -42,9 +42,39 @@ private struct BrowserPaneContent: View {
         VStack(spacing: 0) {
             header
             Divider()
-            BrowserHostingView(session: session)
+            ZStack {
+                BrowserHostingView(session: session)
+                if let loadError = session.loadError {
+                    loadFailureMessage(loadError)
+                }
+            }
         }
         .frame(minWidth: 380, idealWidth: 720, minHeight: 300)
+    }
+
+    /// The pane's distinct failure state: a failed load leaves the web
+    /// view blank, so the pane says so in plain language — with the
+    /// failure's reason and a way to retry — instead of looking like an
+    /// empty page under the address.
+    private func loadFailureMessage(_ message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("Couldn't load the page")
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Try Again") {
+                session.reload()
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
     }
 
     private var header: some View {

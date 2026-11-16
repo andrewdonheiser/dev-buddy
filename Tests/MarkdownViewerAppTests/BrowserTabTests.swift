@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebKit
 @testable import MarkdownViewer
 
 /// Covers the embedded browser tabs: lifecycle and selection, the nesting
@@ -134,6 +135,50 @@ struct BrowserTabTests {
         _ = store.openTerminalTab()
         #expect(store.selectedBrowser == nil)
         #expect(store.selectedTerminal != nil)
+    }
+
+    @Test("closing the last document keeps a visible browser in front of open terminals")
+    func closingLastDocumentDoesNotDisplaceVisibleBrowser() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        let document = try #require(store.selectedDocument)
+        _ = store.openTerminalTab()
+        // Opening the browser takes the column from the terminal; the
+        // document stays selected behind it.
+        let browser = store.openBrowserTab(url: makeURL("https://example.com"))
+        #expect(store.selectedBrowser?.id == browser.id)
+        #expect(store.selectedTerminal == nil)
+
+        store.close(document.id)
+
+        // The terminal fallback must not displace the visible browser, and
+        // only one pane selection may be set.
+        #expect(store.documents.isEmpty)
+        #expect(store.selectedBrowser?.id == browser.id)
+        #expect(store.selectedTerminal == nil)
+    }
+
+    @Test("closing all documents keeps a visible browser in front of open terminals")
+    func closingAllDocumentsDoesNotDisplaceVisibleBrowser() throws {
+        let store = makeStore()
+        let url = try makeTempFile("# Doc")
+        defer { try? FileManager.default.removeItem(at: url) }
+        defer { store.closeAll() }
+
+        store.open(url: url)
+        _ = store.openTerminalTab()
+        let browser = store.openBrowserTab(url: makeURL("https://example.com"))
+        #expect(store.selectedBrowser?.id == browser.id)
+
+        store.closeAllDocuments()
+
+        #expect(store.documents.isEmpty)
+        #expect(store.selectedBrowser?.id == browser.id)
+        #expect(store.selectedTerminal == nil)
     }
 
     @Test("browser tabs nest under review work units")
@@ -415,5 +460,68 @@ struct BrowserTabTests {
         captured?("")
         captured?("Example Domain")
         #expect(store.browsers.first { $0.id == browser.id }?.title == "Example Domain")
+    }
+
+    // The navigation-failure tests drive the session's WKNavigationDelegate
+    // callbacks directly — the same calls WebKit makes — so they stay off
+    // the network while covering the published error state.
+
+    @Test("a failed provisional navigation publishes the load error")
+    func loadFailureIsPublished() {
+        let session = BrowserSession(url: URL(string: "about:blank")!, initialTitle: "Loading")
+        defer { session.stop() }
+
+        #expect(session.loadError == nil)
+
+        session.webView(session.view,
+                        didFailProvisionalNavigation: nil,
+                        withError: NSError(domain: NSURLErrorDomain,
+                                           code: NSURLErrorCannotFindHost,
+                                           userInfo: [NSLocalizedDescriptionKey: "The host could not be found"]))
+
+        #expect(session.loadError == "The host could not be found")
+    }
+
+    @Test("a failure after commit also publishes the load error")
+    func postCommitFailureIsPublished() {
+        let session = BrowserSession(url: URL(string: "about:blank")!, initialTitle: "Loading")
+        defer { session.stop() }
+
+        session.webView(session.view,
+                        didFail: nil,
+                        withError: NSError(domain: NSURLErrorDomain,
+                                           code: NSURLErrorNetworkConnectionLost,
+                                           userInfo: [NSLocalizedDescriptionKey: "The connection was lost"]))
+
+        #expect(session.loadError == "The connection was lost")
+    }
+
+    @Test("a committed navigation clears the load error")
+    func commitClearsLoadError() {
+        let session = BrowserSession(url: URL(string: "about:blank")!, initialTitle: "Loading")
+        defer { session.stop() }
+
+        session.webView(session.view,
+                        didFailProvisionalNavigation: nil,
+                        withError: NSError(domain: NSURLErrorDomain,
+                                           code: NSURLErrorCannotConnectToHost,
+                                           userInfo: [NSLocalizedDescriptionKey: "Could not connect"]))
+        #expect(session.loadError != nil)
+
+        session.webView(session.view, didCommit: nil)
+
+        #expect(session.loadError == nil)
+    }
+
+    @Test("a cancelled load is not reported as a failure")
+    func cancelledLoadIsNotAFailure() {
+        let session = BrowserSession(url: URL(string: "about:blank")!, initialTitle: "Loading")
+        defer { session.stop() }
+
+        session.webView(session.view,
+                        didFailProvisionalNavigation: nil,
+                        withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+
+        #expect(session.loadError == nil)
     }
 }

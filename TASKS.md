@@ -162,6 +162,12 @@
 - [x] Tests: browser lifecycle/selection/fallbacks, nesting rules for links,
       new-markdown creation and failure, cycling, session reuse and title
       streaming, sidebar row ids and search, selection-precedence coverage
+- [x] Review fixes (PR #21, medium findings): the last-document fallback in
+      `close(_:)`/`closeAllDocuments()` no longer displaces a visible browser
+      with a terminal; `BrowserSession` publishes a `loadError` via its
+      `WKNavigationDelegate` (cleared on commit, cancellations ignored) and
+      `BrowserPane` shows a distinct plain-language failure message with a
+      retry
 
 ## Verify
 - [ ] `swift build` (not run: no Swift toolchain in this sandbox — see PR)

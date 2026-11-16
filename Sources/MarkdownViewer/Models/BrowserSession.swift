@@ -24,6 +24,11 @@ final class BrowserSession: ObservableObject {
     /// Whether the page can go back / forward in its history.
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
+    /// Why the page could not be shown, when its load failed (offline,
+    /// unreachable host, TLS error); cleared when a navigation commits
+    /// again. Without it the pane would show a blank view under the URL
+    /// as if a page were displayed.
+    @Published private(set) var loadError: String?
 
     /// Receives title updates as the page loads, wired by whoever creates
     /// the session — the session never reaches into a store itself.
@@ -41,6 +46,7 @@ final class BrowserSession: ObservableObject {
         // with it off.
         self.view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         view.allowsBackForwardNavigationGestures = true
+        view.navigationDelegate = self
         view.load(URLRequest(url: url))
         observePageState()
     }
@@ -92,5 +98,38 @@ final class BrowserSession: ObservableObject {
         guard title != self.title else { return }
         self.title = title
         onTitleChange?(title)
+    }
+}
+
+// MARK: - Navigation failures
+
+extension BrowserSession: WKNavigationDelegate {
+
+    /// A committed navigation clears any prior failure: a page (or at
+    /// least an interim one) is loading again.
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation?) {
+        loadError = nil
+    }
+
+    /// A failure after the navigation committed (connection dropped
+    /// mid-load).
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation?, withError error: Error) {
+        reportLoadFailure(error)
+    }
+
+    /// A failure before anything loaded (unreachable host, offline, TLS
+    /// error) — the case that otherwise leaves a blank view with no
+    /// explanation.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation?, withError error: Error) {
+        reportLoadFailure(error)
+    }
+
+    /// Publishes a load failure's plain-language reason. A cancelled load
+    /// (the user navigating away mid-load, or the tab closing) is not a
+    /// failure the pane needs to describe.
+    private func reportLoadFailure(_ error: Error) {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+        loadError = error.localizedDescription
     }
 }
