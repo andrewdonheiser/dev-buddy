@@ -13,10 +13,36 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The job only builds and tests; it never needs the token.
+          persist-credentials: false
       - name: Select newest Xcode
-        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+        # Pick by the toolchain version each bundle reports, not by name:
+        # the unversioned default Xcode.app can never win a lexicographic
+        # sort against versioned names ("." sorts before "_").
+        run: |
+          newest=$(for app in /Applications/Xcode*.app; do
+            version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+              "$app/Contents/version.plist" 2>/dev/null || echo 0)
+            echo "$version $app"
+          done | sort -V | tail -1 | cut -d' ' -f2-)
+          echo "Selecting $newest"
+          sudo xcode-select -s "$newest"
       - name: Swift version
-        run: swift --version
+        # A wrong Xcode pick would otherwise surface as an opaque SwiftPM
+        # error inside the build; assert the toolchain covers SwiftTerm's
+        # swift-tools-version (6.2) so it fails with a clear message.
+        run: |
+          swift --version
+          swift_version=$(swift --version | sed -nE 's/.*Apple Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -1)
+          if [ -z "$swift_version" ]; then
+            echo "::error::Could not read the selected toolchain's Swift version."
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "$swift_version" "6.2" | sort -V | tail -1)" != "$swift_version" ]; then
+            echo "::error::Selected Xcode provides Swift $swift_version, but SwiftTerm needs at least 6.2 — the Xcode-selection step picked the wrong toolchain."
+            exit 1
+          fi
       - name: Build
         run: swift build
       - name: Test
