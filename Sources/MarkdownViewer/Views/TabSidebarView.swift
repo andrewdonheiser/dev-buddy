@@ -182,6 +182,9 @@ struct TabSidebarView: View {
             if let loadFailure = workUnits.loadFailure {
                 recordsNotice(loadFailure)
             }
+            if let saveFailure = workUnits.saveFailure {
+                recordsNotice(saveFailure)
+            }
             if let id = activeLabelID, let label = labels.label(id: id) {
                 activeFilterBar(label)
             }
