@@ -105,12 +105,23 @@ targets: `MarkdownViewerKitTests`, `MarkdownViewerChatTests`,
   low-deferral default applies to preference-dependent nitpicks and
   findings on pre-existing code.
 - **Defer accumulated low findings** to the dormant archive issue (#16)
-  rather than spending further fix rounds on them. When recording low
-  findings as disagreements, the fix agent appends them to #16 in the same
-  iteration — a short bulleted list with file:line and the finding text —
-  so deferred findings survive PR-comment burial. The upstream verdict-side
-  behavior for low-only findings is tracked elsewhere
-  (fullsend-ai/agents#1141, fullsend-ai/agents#1760).
+  rather than spending further fix rounds on them. The archive step always
+  has an executor, whoever closes the round:
+  - When the fix agent records low findings as disagreements, it appends
+    them to #16 in the same iteration.
+  - When a PR round ends or a PR merges with open low-severity findings
+    that no fix agent has recorded and appended in that round — whether
+    or not a fix agent participated in an earlier round (the normal path
+    for human-authored PRs) — whoever closes the round, normally the PR
+    author, performs the same archive step in the same iteration: append
+    the remaining lows to #16 as a short bulleted list with file:line
+    and the finding text.
+  Either way the deferred findings survive PR-comment burial — no low
+  finding may end a round existing only in PR review comments. The manual
+  author rule can be retired once post-review archive support lands
+  upstream (fullsend-ai/agents#1328). The upstream verdict-side behavior
+  for low-only findings is tracked elsewhere (fullsend-ai/agents#1141,
+  fullsend-ai/agents#1760).
 
 ## Workflow conventions
 

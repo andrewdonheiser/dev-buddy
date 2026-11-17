@@ -229,3 +229,25 @@
       all targets green)
 - [ ] CI on this PR stays green (the new Xcode-selection and version-assert
       steps run for the first time here)
+
+# Review finding policy: archive without a fix agent (issue #26)
+
+- [x] AGENTS.md "Defer accumulated low findings": the archive step now has
+      an executor on every path — the fix agent when it records low findings
+      as disagreements, and whoever closes the round (normally the PR
+      author) when a round ends or a PR merges with open low-severity
+      findings that no fix agent has recorded and appended in that round,
+      whether or not a fix agent participated in an earlier round (the
+      normal path for human-authored PRs, e.g. PR #23)
+- [x] State the invariant explicitly — no low finding may end a round
+      existing only in PR review comments — so the single-actor failure mode
+      cannot recur through another wording gap
+- [x] Note the future platform path (post-review archive support,
+      fullsend-ai/agents#1328) so the manual author rule can be retired
+      when automation lands
+
+## Verify
+- [ ] `swift build` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
+- [ ] `swift test` (not run: no Swift toolchain in this sandbox — docs-only
+      change, no source files touched, see PR)
