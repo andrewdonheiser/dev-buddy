@@ -26,6 +26,11 @@ description and flag which tests could not be executed — never claim tests
 pass without running them. The test suite is the arbiter: if a test you wrote
 fails, the implementation is wrong, not the test.
 
+CI runs both on every pull request and on pushes to main. When the sandbox
+lacks a Swift toolchain, cite the green CI run as the verification evidence
+instead of stopping at "tests could not run" — and treat a red run as a
+failing verification to fix, never an obstacle to push past.
+
 Tests use Swift Testing (`#expect`, `@Suite`). Test targets mirror the source
 targets: `MarkdownViewerKitTests`, `MarkdownViewerChatTests`,
 `MarkdownViewerAppTests`.
@@ -92,11 +97,13 @@ targets: `MarkdownViewerKitTests`, `MarkdownViewerChatTests`,
 - **Record low-severity and nit findings as disagreements** citing this
   policy instead of fixing them, unless the human's `/fs-fix` instruction
   explicitly asks for them (e.g. `/fs-fix fix everything` overrides this
-  default). Exception: low-severity findings that are objective, verifiable
-  defects in lines the PR itself introduces (broken references, incorrect
-  facts, malformed syntax) are fixed in the first fix iteration regardless
-  of severity; the low-deferral default applies to preference-dependent
-  nitpicks and findings on pre-existing code.
+  default). A bare `/fs-fix` with no further instruction is not such an
+  ask — it follows the defaults in this section. Exception: low-severity
+  findings that are objective, verifiable defects in lines the PR itself
+  introduces (broken references, incorrect facts, malformed syntax) are
+  fixed in the first fix iteration regardless of severity; the
+  low-deferral default applies to preference-dependent nitpicks and
+  findings on pre-existing code.
 - **Defer accumulated low findings** to the dormant archive issue (#16)
   rather than spending further fix rounds on them. When recording low
   findings as disagreements, the fix agent appends them to #16 in the same

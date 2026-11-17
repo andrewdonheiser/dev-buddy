@@ -172,3 +172,26 @@
       change, no source files touched, see PR)
 - [ ] `swift test` (not run: no Swift toolchain in this sandbox — docs-only
       change, no source files touched, see PR)
+
+# macOS CI (issue #8, follow-ups in issue #13)
+
+- [x] `.github/workflows/ci.yaml`: build-and-test job on macos-26, top-level
+      `permissions: contents: read`, `persist-credentials: false` on checkout
+- [x] Deterministic Xcode selection: pick the bundle reporting the highest
+      toolchain version from its `version.plist` (the unversioned default
+      `Xcode.app` can never win a lexicographic name sort), then assert the
+      selected toolchain's Swift version covers SwiftTerm's
+      swift-tools-version (6.2) so a wrong pick fails with a clear message
+- [x] AGENTS.md "Verify before you finish" cites CI as the verification
+      evidence when the sandbox lacks a Swift toolchain
+- [x] AGENTS.md review-finding policy: a bare `/fs-fix` with no further
+      instruction follows the section's defaults, not the explicit-ask
+      override
+
+## Verify
+- [x] `swift build` (run in the authoring sandbox: clean build; no source
+      files touched by this change)
+- [x] `swift test` (run in the authoring sandbox: 156 tests, 21 suites,
+      all targets green)
+- [ ] CI on this PR stays green (the new Xcode-selection and version-assert
+      steps run for the first time here)
