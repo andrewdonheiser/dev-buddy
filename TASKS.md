@@ -189,7 +189,9 @@
       override
 
 ## Verify
-- [x] `swift build`
-- [x] `swift test`
+- [x] `swift build` (run in the authoring sandbox: clean build; no source
+      files touched by this change)
+- [x] `swift test` (run in the authoring sandbox: 156 tests, 21 suites,
+      all targets green)
 - [ ] CI on this PR stays green (the new Xcode-selection and version-assert
       steps run for the first time here)

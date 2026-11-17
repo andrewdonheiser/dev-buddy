@@ -21,18 +21,24 @@ jobs:
         # the unversioned default Xcode.app can never win a lexicographic
         # sort against versioned names ("." sorts before "_").
         run: |
+          set -euo pipefail
           newest=$(for app in /Applications/Xcode*.app; do
             version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
               "$app/Contents/version.plist" 2>/dev/null || echo 0)
             echo "$version $app"
           done | sort -V | tail -1 | cut -d' ' -f2-)
+          if [ ! -d "$newest" ]; then
+            echo "::error::No Xcode found under /Applications."
+            exit 1
+          fi
           echo "Selecting $newest"
           sudo xcode-select -s "$newest"
-      - name: Swift version
+      - name: Check Swift version covers SwiftTerm's requirement
         # A wrong Xcode pick would otherwise surface as an opaque SwiftPM
         # error inside the build; assert the toolchain covers SwiftTerm's
         # swift-tools-version (6.2) so it fails with a clear message.
         run: |
+          set -euo pipefail
           swift --version
           swift_version=$(swift --version | sed -nE 's/.*Apple Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -1)
           if [ -z "$swift_version" ]; then
