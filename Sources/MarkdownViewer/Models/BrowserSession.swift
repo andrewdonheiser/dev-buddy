@@ -37,9 +37,12 @@ final class BrowserSession: NSObject, ObservableObject {
     /// Receives title updates as the page loads, wired by whoever creates
     /// the session — the session never reaches into a store itself.
     private let onTitleChange: (@MainActor (String) -> Void)?
-    /// Where links the page offers in schemes the pane cannot show go —
-    /// injected like the store's link seam, so tests can intercept it.
-    private let openExternalURL: @MainActor (URL) -> Void
+    /// Where links the page offers in schemes the pane cannot show go.
+    /// Internal, mirroring the store's link seam: the store's default
+    /// session factory forwards its own injected opener here, so tests
+    /// (and callers) intercept pane hand-offs the same way they intercept
+    /// document links.
+    let openExternalURL: @MainActor (URL) -> Void
     private var observations: [NSKeyValueObservation] = []
 
     init(url: URL,
@@ -117,26 +120,50 @@ final class BrowserSession: NSObject, ObservableObject {
 
 extension BrowserSession: WKNavigationDelegate {
 
-    /// The pane shows web pages only: navigations to http, https and the
-    /// blank pages the session itself loads stay in-app, and every other
-    /// scheme is cancelled, so a loaded page cannot smuggle a launch of
-    /// an arbitrary registered handler past the link router in
-    /// `DocumentStore`. A user click on a mailto link still reaches the
-    /// system handler, matching what document links do; everything else
-    /// fails closed.
+    /// Where a navigation goes.
+    enum NavigationRouting: Equatable {
+        /// Shown in the pane's web view.
+        case load
+        /// Relayed to the system handler, e.g. a mailto link's mail client.
+        case handOff(URL)
+        /// Not shown and not relayed — the navigation is cancelled.
+        case cancel
+    }
+
+    /// The routing for a navigation request: the pane shows web pages
+    /// only, and every other scheme is cancelled, so a loaded page cannot
+    /// smuggle a launch of an arbitrary registered handler past the link
+    /// router in `DocumentStore`. A user click on a mailto link still
+    /// reaches the system handler, matching what document links do.
+    /// WebKit reports programmatic anchor activation (JavaScript calling
+    /// `.click()`) with the same `.linkActivated` type as a genuine click,
+    /// so the mailto hand-off cannot tell them apart — a nuisance vector
+    /// limited to the mail client, not arbitrary handler launch.
+    static func routing(for url: URL?, navigationType: WKNavigationType) -> NavigationRouting {
+        switch url?.scheme?.lowercased() {
+        case "http", "https", "about":
+            return .load
+        case "mailto":
+            guard navigationType == .linkActivated, let url else { return .cancel }
+            return .handOff(url)
+        default:
+            return .cancel
+        }
+    }
+
+    /// Applies the routing above; extracted so the policy is testable
+    /// without a live web view.
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        switch navigationAction.request.url?.scheme?.lowercased() {
-        case "http", "https", "about":
+        switch Self.routing(for: navigationAction.request.url,
+                            navigationType: navigationAction.navigationType) {
+        case .load:
             decisionHandler(.allow)
-        case "mailto":
-            if navigationAction.navigationType == .linkActivated,
-               let url = navigationAction.request.url {
-                openExternalURL(url)
-            }
+        case .handOff(let url):
+            openExternalURL(url)
             decisionHandler(.cancel)
-        default:
+        case .cancel:
             decisionHandler(.cancel)
         }
     }

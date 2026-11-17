@@ -76,15 +76,20 @@ final class DocumentStore: ObservableObject {
          removeTerminalSession: @escaping SessionRemover = { TerminalSessionManager.shared.removeSession($0) },
          terminalSessionProvider: @escaping SessionProvider = { TerminalSessionManager.shared.session($0, onTitleChange: $1) },
          openExternalURL: @escaping ExternalLinkOpener = { NSWorkspace.shared.open($0) },
-         browserSessionFactory: @escaping BrowserSessionFactory = { browser, onTitleChange in
-             BrowserSession(url: browser.url, initialTitle: browser.title, onTitleChange: onTitleChange)
-         },
+         browserSessionFactory: BrowserSessionFactory? = nil,
          labels: LabelStore = .shared) {
         self.hasLiveTerminalProcess = hasLiveTerminalProcess
         self.removeTerminalSession = removeTerminalSession
         self.terminalSessionProvider = terminalSessionProvider
         self.openExternalURL = openExternalURL
-        self.browserSessionFactory = browserSessionFactory
+        // The default factory is materialized here rather than as a
+        // parameter default so it can forward the store's external-opener
+        // seam into every session it creates — a parameter default cannot
+        // reference another parameter.
+        self.browserSessionFactory = browserSessionFactory ?? { [openExternalURL] browser, onTitleChange in
+            BrowserSession(url: browser.url, initialTitle: browser.title,
+                           onTitleChange: onTitleChange, openExternalURL: openExternalURL)
+        }
         self.labels = labels
         // Re-render every document when the reading width or text size changes.
         options.$contentWidth

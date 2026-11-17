@@ -318,6 +318,50 @@ struct BrowserTabTests {
         #expect(store.selectedBrowser == nil)
     }
 
+    @Test("the browser pane's navigation policy routes by scheme and click")
+    func navigationPolicyRoutesByScheme() {
+        // Web pages, and the blank pages the session itself loads, stay
+        // in the pane.
+        #expect(BrowserSession.routing(for: URL(string: "https://example.com"),
+                                       navigationType: .linkActivated) == .load)
+        #expect(BrowserSession.routing(for: URL(string: "http://example.com"),
+                                       navigationType: .other) == .load)
+        #expect(BrowserSession.routing(for: URL(string: "about:blank"),
+                                       navigationType: .other) == .load)
+        // A user click on a mailto link reaches the system handler; the
+        // same URL without a click (a redirect, say) does not.
+        #expect(BrowserSession.routing(for: URL(string: "mailto:someone@example.com"),
+                                       navigationType: .linkActivated)
+            == .handOff(URL(string: "mailto:someone@example.com")!))
+        #expect(BrowserSession.routing(for: URL(string: "mailto:someone@example.com"),
+                                       navigationType: .other) == .cancel)
+        // Every other scheme fails closed, whatever launched it.
+        #expect(BrowserSession.routing(for: URL(string: "ssh://git@example.com/repo"),
+                                       navigationType: .linkActivated) == .cancel)
+        #expect(BrowserSession.routing(for: URL(string: "file:///etc/hosts"),
+                                       navigationType: .linkActivated) == .cancel)
+        #expect(BrowserSession.routing(for: nil,
+                                       navigationType: .linkActivated) == .cancel)
+    }
+
+    @Test("the store's external-opener seam reaches browser-pane mailto links")
+    func externalOpenerSeamForwardsToSessions() throws {
+        var openedExternally: [URL] = []
+        let store = DocumentStore(openExternalURL: { url in openedExternally.append(url) },
+                                  labels: LabelStore(storageURL: FileManager.default.temporaryDirectory
+                                      .appendingPathComponent("browser-tests-labels-\(UUID().uuidString).json")))
+        defer { store.closeAll() }
+
+        // The default session factory must forward the store's injected
+        // opener, so an injected opener intercepts pane links the same way
+        // it intercepts document links.
+        let browser = store.openBrowserTab(url: makeURL("about:blank"))
+        let session = try #require(store.browserSession(browser.id))
+        session.openExternalURL(makeURL("mailto:someone@example.com"))
+
+        #expect(openedExternally == [makeURL("mailto:someone@example.com")])
+    }
+
     @Test("new markdown files are created in the worktree and nest under the unit")
     func newMarkdownNestsUnderUnit() throws {
         let store = makeStore()
