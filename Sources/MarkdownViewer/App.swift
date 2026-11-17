@@ -58,8 +58,8 @@ struct MarkdownViewerApp: App {
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(!store.canRefreshSelected)
                 // The label reflects what ⌘W will close: the visible
-                // terminal takes precedence over its document.
-                Button(store.selectedTerminalID == nil ? "Close Tab" : "Close Terminal") {
+                // terminal or browser takes precedence over its document.
+                Button(store.closeSelectedTitle) {
                     store.closeSelected()
                 }
                 .keyboardShortcut("w", modifiers: .command)

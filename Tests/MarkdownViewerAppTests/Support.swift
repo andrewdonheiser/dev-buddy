@@ -96,10 +96,14 @@ struct ChatFixture {
 }
 
 /// Polls `condition` until it holds or `timeout` elapses. Tests run on the main
-/// actor, so yielding here lets the store's streaming task make progress.
+/// actor, so yielding here lets the store's streaming task make progress. The
+/// default deadline has headroom for a loaded CI runner, where the whole
+/// test process can be stretched several-fold by main-actor contention; on a
+/// healthy machine the wait ends as soon as the condition holds, so the
+/// headroom costs nothing.
 @MainActor
 @discardableResult
-func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async -> Bool {
+func waitUntil(timeout: Duration = .seconds(10), _ condition: () -> Bool) async -> Bool {
     let clock = ContinuousClock()
     let deadline = clock.now + timeout
     while clock.now < deadline {

@@ -5,12 +5,18 @@ struct SavedView: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     var paths: [String]
+    /// The review work unit each path is nested under, aligned with
+    /// `paths`; nil entries — and a nil array, for snapshots saved before
+    /// nesting existed — mean top-level tabs.
+    var workUnitIDs: [String?]?
     var selectedPath: String?
 
-    init(id: UUID = UUID(), name: String, paths: [String], selectedPath: String? = nil) {
+    init(id: UUID = UUID(), name: String, paths: [String],
+         workUnitIDs: [String?]? = nil, selectedPath: String? = nil) {
         self.id = id
         self.name = name
         self.paths = paths
+        self.workUnitIDs = workUnitIDs
         self.selectedPath = selectedPath
     }
 
@@ -47,10 +53,12 @@ final class SavedViewStore: ObservableObject {
     /// Stores a snapshot, replacing any existing view with the same name.
     /// Returns nil when the name is blank or there is nothing to save.
     @discardableResult
-    func save(name: String, paths: [String], selectedPath: String?) -> SavedView? {
+    func save(name: String, paths: [String], workUnitIDs: [String?]? = nil,
+              selectedPath: String?) -> SavedView? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !paths.isEmpty else { return nil }
-        let view = SavedView(name: trimmed, paths: paths, selectedPath: selectedPath)
+        let view = SavedView(name: trimmed, paths: paths,
+                             workUnitIDs: workUnitIDs, selectedPath: selectedPath)
         views.removeAll { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }
         views.insert(view, at: 0)
         persist()
