@@ -271,9 +271,12 @@ final class WorkUnitStore: ObservableObject {
         case 1:
             return Self.isGeneratedUnitDirectoryName(String(components[0]))
         case 2:
-            // The legacy layout: <owner>/<owner>-<repo>-<number>-<id>.
+            // The legacy layout: <owner>/<repo>-<number>-<id>, from before
+            // the slug's slash was flattened into the name — the slash in
+            // "owner/repo" became a path separator, so the inner component
+            // carries only the repository name.
             return PullRequest.isValidName(String(components[0]))
-                && Self.isGeneratedUnitDirectoryName(String(components[1]))
+                && Self.isLegacyUnitDirectoryName(String(components[1]))
         default:
             return false
         }
@@ -282,8 +285,22 @@ final class WorkUnitStore: ObservableObject {
     /// Whether `name` matches the `<slug>-<number>-<uuid prefix>` shape
     /// createReview generates, e.g. `owner-repo-12-1A2B3C4D`.
     nonisolated static func isGeneratedUnitDirectoryName(_ name: String) -> Bool {
+        isUnitTailName(name, minimumParts: 4)
+    }
+
+    /// Whether `name` matches the inner component of the pre-flattening
+    /// layout, `<repo>-<number>-<uuid prefix>` — e.g. `repo-12-1A2B3C4D`,
+    /// with no owner prefix, so one dash fewer than the current shape.
+    nonisolated static func isLegacyUnitDirectoryName(_ name: String) -> Bool {
+        isUnitTailName(name, minimumParts: 3)
+    }
+
+    /// The shared tail of both generated shapes: a positive PR number
+    /// followed by an 8-character hex uuid prefix, with at least
+    /// `minimumParts` dash-separated components before them.
+    private nonisolated static func isUnitTailName(_ name: String, minimumParts: Int) -> Bool {
         let parts = name.split(separator: "-")
-        guard parts.count >= 4,
+        guard parts.count >= minimumParts,
               let number = Int(parts[parts.count - 2]), number > 0 else { return false }
         let uuidPrefix = parts[parts.count - 1]
         return uuidPrefix.count == 8 && uuidPrefix.allSatisfy(\.isHexDigit)

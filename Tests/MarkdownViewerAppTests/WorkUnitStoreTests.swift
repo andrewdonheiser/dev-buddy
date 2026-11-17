@@ -483,25 +483,36 @@ struct WorkUnitStoreTests {
     @Test("units from the legacy nested layout are still removed on delete")
     func legacyNestedLayoutStillDeleted() async throws {
         let fixture = WorkUnitFixture()
-        let unit = try await fixture.store.createReview(
-            prURLString: "https://github.com/owner/repo/pull/12",
-            issueReference: nil)
+        // The layout before the slug was flattened: the slug's slash
+        // became a path separator, so the owner is a folder and the inner
+        // component carries only the repository name. The dashless repo
+        // is the common case — and the discriminating one, since a dashed
+        // repo name also passes the stricter current-shape check.
+        for innerName in ["repo-12-1A2B3C4D", "my-repo-12-1A2B3C4D"] {
+            // A fresh unit per shape: each delete persists the record's
+            // removal, so the previous iteration's tampering cannot be
+            // reused.
+            let unit = try await fixture.store.createReview(
+                prURLString: "https://github.com/owner/repo/pull/12",
+                issueReference: nil)
+            let legacyDirectory = fixture.reviewsDirectory
+                .appendingPathComponent("owner", isDirectory: true)
+                .appendingPathComponent(innerName, isDirectory: true)
+            let legacyWorktree = legacyDirectory.appendingPathComponent("worktree", isDirectory: true)
+            try FileManager.default.createDirectory(at: legacyWorktree, withIntermediateDirectories: true)
+            try Self.retargetWorktree(in: fixture.storageURL,
+                                      from: unit.worktreePath, to: legacyWorktree.path)
 
-        // The layout before the slug was flattened: the generated unit
-        // folder nested inside an owner folder.
-        let legacyDirectory = fixture.reviewsDirectory
-            .appendingPathComponent("owner", isDirectory: true)
-            .appendingPathComponent("owner-repo-12-1A2B3C4D", isDirectory: true)
-        let legacyWorktree = legacyDirectory.appendingPathComponent("worktree", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyWorktree, withIntermediateDirectories: true)
-        try Self.retargetWorktree(in: fixture.storageURL,
-                                  from: unit.worktreePath, to: legacyWorktree.path)
+            let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
+            // The fixture store's earlier units ride along in the record;
+            // the tampered one is the unit whose worktree was retargeted.
+            let tampered = try #require(
+                store.units.first { $0.worktreePath == legacyWorktree.path })
+            try store.delete(tampered.id)
 
-        let store = WorkUnitStore(reviewsDirectory: fixture.reviewsDirectory, git: { _, _ in "" })
-        try store.delete(try #require(store.units.first).id)
-
-        #expect(store.units.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: legacyDirectory.path))
+            #expect(store.units.first { $0.id == tampered.id } == nil)
+            #expect(!FileManager.default.fileExists(atPath: legacyDirectory.path))
+        }
 
         try? FileManager.default.removeItem(at: fixture.reviewsDirectory.deletingLastPathComponent())
     }
