@@ -110,10 +110,12 @@ targets: `MarkdownViewerKitTests`, `MarkdownViewerChatTests`,
   - When the fix agent records low findings as disagreements, it appends
     them to #16 in the same iteration.
   - When a PR round ends or a PR merges with open low-severity findings
-    and no fix agent has participated (the normal path for human-authored
-    PRs), the PR author performs the same archive step in the same
-    iteration: append the remaining lows to #16 as a short bulleted list
-    with file:line and the finding text.
+    that no fix agent has recorded and appended in that round — whether
+    or not a fix agent participated in an earlier round (the normal path
+    for human-authored PRs) — whoever closes the round, normally the PR
+    author, performs the same archive step in the same iteration: append
+    the remaining lows to #16 as a short bulleted list with file:line
+    and the finding text.
   Either way the deferred findings survive PR-comment burial — no low
   finding may end a round existing only in PR review comments. The manual
   author rule can be retired once post-review archive support lands
